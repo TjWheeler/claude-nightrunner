@@ -62,13 +62,36 @@ checked out there. After editing it, run `/reload-plugins` or open a new tab.
 ## Use
 
 ```
-/nightrunner start [name] [budget=150k] [wait=on|off]   start a run in this folder
-/nightrunner status                                    show the run, its settings and the context used
-/nightrunner stop                                      stop the run
+/nightrunner start [name] [budget=150k] [wait=on|off]   start a run in this tab
+/nightrunner status                                    show the run, its settings, the context used and other runs in the folder
+/nightrunner stop                                      stop this tab's run
+/nightrunner resume [name|id]                          take over a run whose tab was closed
 ```
 
 The name is an optional label. Anything written as `key=value` is a setting, so
 a name can't contain `=`.
+
+### Several tabs
+
+A run belongs to the tab that started it. Each tab can have one run, so several
+tabs in the same folder can each run their own. Their handovers, budget nudges,
+waits and stops don't affect each other. The runs share the folder's working
+tree and git, though, so give them work that won't collide.
+
+`/nightrunner status` lists the folder's other runs. Each one is marked **live**
+if its tab is open, or **orphaned** if the tab has been gone for 3 minutes.
+
+If a tab closes mid-run, its run stays active but orphaned:
+
+- **Reopen the conversation**, for example with `claude --resume` or by
+  reloading the VS Code window. The tab takes its run back on its own.
+- **Or, in another tab,** run `/nightrunner resume`. With no name, it takes the
+  only orphaned run; with several, name one. If the last session had handed
+  over, nightrunner clears the tab and starts the next session with the note.
+  Otherwise, tell Claude what to carry on with, because the new tab has none of
+  the run's context.
+
+A new tab never takes a run on its own, and a live run can't be taken.
 
 Then give Claude the work, and say how to hand over. For example:
 
@@ -136,8 +159,9 @@ shows when it will carry on.
   again every 30 minutes, within the same 6 hours.
 - **Stop or carry on yourself:** `/nightrunner stop` cancels a wait. If you
   carry on by hand and the turn gets through, the wait is cancelled.
-- **Tab closed during a wait:** the run isn't resumed automatically. Open the
-  folder again and type "continue" when the limit has reset.
+- **Tab closed during a wait:** the run isn't resumed automatically. Reopen the
+  conversation, or `/nightrunner resume` the run, and type "continue" when the
+  limit has reset.
 
 Waiting is on by default. To turn it off:
 
@@ -183,28 +207,27 @@ session, so Claude doesn't treat it as your instruction or approval.
 
 ## What it writes
 
-It writes `.nightrunner/run.json` in the project folder, holding the run state
-and the pending note, and `~/.claude/nightrunner.json` when you save a default
+It writes one file per run in `.nightrunner/runs/` in the project folder,
+holding the run's state and pending note, and `~/.claude/nightrunner.json` when you save a default
 through Claude. `.nightrunner/` contains a `.gitignore` of `*`, so nothing
 in it is committed.
 
 ## Limits
 
-This is an early release (0.1.1):
+This is an early release (0.1.2):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
   doesn't force one. Apart from paid overage, nothing stops a run on cost or
-  session count. Watch a long
-  run, or tell Claude in the prompt when to stop.
+  session count. Watch a long run, or tell Claude in the prompt when to stop.
 - The usage-limit wait has been unit-tested but hasn't yet seen a real limit.
 - There are no notifications yet. A run that stops on a far-off reset just
   stops.
 - Model, permissions and git are left as you set them. A permission prompt
   pauses the run until you answer it.
-- Use one tab per folder during a run.
-- If the tab or VS Code closes mid-run, the run stays active. A new tab in that
-  folder picks it up: carry on there, or run `/nightrunner stop` before starting
-  another.
+- Runs in the same folder share its working tree. nightrunner keeps their
+  state apart but doesn't stop their edits or commits colliding.
+- Run files aren't deleted, so `.nightrunner/runs/` grows by one small file per
+  run.
 
 Later versions are planned to add a model pin, session and no-progress limits,
 notifications, guard rails and commits.

@@ -6,7 +6,10 @@ import { exhaustedWindows, classifyTurnEnd, RESUME_MARGIN_MS } from './usage.js'
 
 export { classifyTurnEnd }
 
-export const RUN_FILE = '.nightrunner/run.json'
+// Each run has its own file, so tabs in one folder can each run one.
+export const RUNS_DIR = '.nightrunner/runs'
+// Where 0.1.0 and 0.1.1 kept the folder's one run; moved into RUNS_DIR on load.
+export const LEGACY_RUN_FILE = '.nightrunner/run.json'
 export const GITIGNORE = '.nightrunner/.gitignore'
 export const GITIGNORE_TEXT = '*\n'
 export const OUTCOMES = ['continue', 'complete', 'blocked']
@@ -16,6 +19,11 @@ export const DEFAULT_BUDGET = 200_000
 export const USER_FILE = '.claude/nightrunner.json'
 // The project's settings, committed with the repo (relative to its folder).
 export const PROJECT_FILE = '.claude/nightrunner.json'
+
+// A tab with a run records a heartbeat this often. A run whose heartbeat is
+// older than STALE_MS has lost its tab, and /nightrunner resume can take it.
+export const HEARTBEAT_MS = 60 * 1000
+export const STALE_MS = 3 * 60 * 1000
 
 // Usage limits: wait for the reset unless it is further away than this.
 export const MAX_WAIT_HOURS = 6
@@ -53,14 +61,14 @@ export const CONFIGURE_TOOL = {
   description:
     "Changes nightrunner's settings when the user asks you to. With no input it reports them. " +
     'defaultBudget saves the user\'s default context budget for every project ("150k", or "default" to go back to the built-in 200k). ' +
-    'runBudget changes the budget of the run active in this folder. ' +
+    "runBudget changes the budget of this tab's active run. " +
     'projectUsageWait sets whether runs in this project wait out a usage limit and carry on ("on", "off", or "default" to remove the project setting; it is written to .claude/nightrunner.json, which the user may commit). ' +
     'runUsageWait sets it for the active run. Only change what the user asked for. Main session only.',
   inputSchema: {
     type: 'object',
     properties: {
       defaultBudget: { type: 'string', description: 'The default context budget for all projects, such as "150k" or "300000"; "default" clears it to the built-in 200k.' },
-      runBudget: { type: 'string', description: 'The context budget for the run active in this folder, such as "150k". Needs an active run.' },
+      runBudget: { type: 'string', description: 'The context budget for this tab\'s active run, such as "150k". Needs an active run.' },
       projectUsageWait: { type: 'string', enum: ['on', 'off', 'default'], description: "Whether this project's runs wait for a usage-limit reset and carry on. \"default\" removes the project setting (on)." },
       runUsageWait: { type: 'string', enum: ['on', 'off'], description: 'Whether the active run waits for a usage-limit reset and carries on. Needs an active run.' },
     },
@@ -136,8 +144,8 @@ export function configText(run, { saved, option, project } = {}) {
     ? `Usage-limit wait: ${w.error}`
     : `Usage-limit wait for this project: ${onOff(w.usageWait)} (${w.source === 'project' ? 'project file' : 'built-in default'}).`
   const current = isActive(run)
-    ? `This folder's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}).`
-    : 'No run active in this folder.'
+    ? `This tab's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}).`
+    : 'No run active in this tab.'
   return `${def}\n${wait}\n${current}\nA run started with /nightrunner start budget=… wait=on|off uses those instead.`
 }
 
@@ -263,12 +271,84 @@ export function settingsFileText(current, key, value) {
   return JSON.stringify(next, null, 2) + '\n'
 }
 
-export function newRun({ name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', now }) {
+export function newRun({ id = null, owner = null, sessionId = null, name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', now }) {
   return {
-    version: 1, active: true, name, budget, budgetSource, usageWait, usageWaitSource,
+    version: 1, id, owner, sessionId, heartbeatAt: new Date(now).toISOString(), active: true, name, budget, budgetSource, usageWait, usageWaitSource,
     startedAt: new Date(now).toISOString(), session: 1, handedOverIn: null, nudgedIn: null, pendingNote: null,
     waitUntil: null, waitingSince: null, endedAt: null, endReason: null,
   }
+}
+
+/** A run id: its start time, readable and sortable, and a random suffix. */
+export function newRunId(now, random = Math.random) {
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  return `${stamp}-${Math.floor(random() * 0x10000).toString(16).padStart(4, '0')}`
+}
+
+export const runFile = id => `${RUNS_DIR}/${id}.json`
+
+/** An active run whose tab has kept up its heartbeat. */
+export function isLive(run, now) {
+  if (!isActive(run)) return false
+  const beat = Date.parse(run.heartbeatAt ?? '')
+  return Number.isFinite(beat) && now - beat < STALE_MS
+}
+
+/** This tab owns the run from now on, in session `sessionId`. */
+export function claimRun(run, { owner, sessionId, now }) {
+  return { ...run, owner, sessionId, heartbeatAt: new Date(now).toISOString() }
+}
+
+/** The run file another tab has claimed since this tab last saved it. */
+export const ownedByOther = (onDisk, owner) => Boolean(onDisk?.owner) && onDisk.owner !== owner
+
+/**
+ * A run from before runs had their own files: give it an id from its start, so
+ * tabs that move it at once write the same file. No tab owns it.
+ */
+export function migrateLegacyRun(run) {
+  const id = `${newRunId(Date.parse(run.startedAt) || 0, () => 0).slice(0, -4)}legacy`
+  return { ...run, id, owner: null, sessionId: null, heartbeatAt: null }
+}
+
+/** The active run of a resumed conversation, which its tab takes back on its own. */
+export function runForSession(runs, sessionId) {
+  return runs.find(r => isActive(r) && sessionId && r.sessionId === sessionId) ?? null
+}
+
+const label = run => (run.name ? `"${run.name}" (${run.id})` : run.id)
+
+/**
+ * The run `/nightrunner resume [query]` takes: by id, id prefix or name, or the
+ * only orphaned run when no query is given. Live runs belong to another tab.
+ * @returns {{ run } | { error: string }}
+ */
+export function findResumable(runs, query, now) {
+  const active = runs.filter(isActive)
+  const q = String(query ?? '').trim()
+  if (!q) {
+    const orphaned = active.filter(r => !isLive(r, now))
+    if (orphaned.length === 1) return { run: orphaned[0] }
+    if (!orphaned.length) return { error: active.length ? 'every active run in this folder is live in another tab.' : 'there is no active run in this folder to resume.' }
+    return { error: `several runs are orphaned: ${orphaned.map(label).join(', ')}. Name one: /nightrunner resume <name or id>.` }
+  }
+  const byId = active.filter(r => r.id === q)
+  const matches = byId.length ? byId : active.filter(r => r.id?.startsWith(q) || r.name === q)
+  if (!matches.length) return { error: `no active run in this folder matches "${q}".` }
+  if (matches.length > 1) return { error: `"${q}" matches several runs: ${matches.map(label).join(', ')}. Use the id.` }
+  const [run] = matches
+  if (isLive(run, now)) return { error: `run ${label(run)} is live in another tab (heartbeat ${run.heartbeatAt}). Stop it there, or close that tab and try again in ${STALE_MS / 60000} minutes.` }
+  return { run }
+}
+
+/** One line per other active run in the folder, for status. */
+export function otherRunsText(runs, { ownId, now }) {
+  const others = runs.filter(r => isActive(r) && r.id !== ownId)
+  if (!others.length) return ''
+  const lines = others.map(r => isLive(r, now)
+    ? `- ${label(r)}: live in another tab, session ${r.session}.`
+    : `- ${label(r)}: orphaned (no heartbeat since ${r.heartbeatAt ?? 'it was moved from run.json'}), session ${r.session}. Take it over with /nightrunner resume ${r.name || r.id}.`)
+  return `Other runs in this folder:\n${lines.join('\n')}`
 }
 
 /**

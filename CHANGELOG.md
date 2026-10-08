@@ -4,6 +4,27 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.2] - 2026-10-08
+
+### Added
+
+- Runs in several tabs. A run belongs to the tab that started it, and each tab
+  can have one, so tabs in the same folder no longer overwrite each other's run.
+  Each run has its own file in `.nightrunner/runs/`, and its tab updates a
+  heartbeat every minute.
+- `/nightrunner resume [name|id]` takes over a run whose tab has been closed for
+  3 minutes. If its last session handed over, the tab is cleared and starts the
+  next session with the note. A live run can't be taken.
+- `/nightrunner status` lists the folder's other runs, live or orphaned.
+
+### Changed
+
+- A new tab no longer picks up a run in its folder. Reopening a run's
+  conversation (`claude --resume`, or reloading VS Code) takes the run back.
+  Otherwise, use `/nightrunner resume`.
+- An active run in `.nightrunner/run.json` from an earlier version is moved to
+  `.nightrunner/runs/` as an orphaned run.
+
 ## [0.1.1] - 2026-10-08
 
 ### Added

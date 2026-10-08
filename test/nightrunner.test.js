@@ -7,6 +7,8 @@ import {
   contextLine, STATUS_TOOL, CONFIGURE_TOOL, configureInput, validateConfigure, setRunBudget, configText,
   parseUserFile, userFileText, parseOnOff, resolveUsageWait, planUsageWait, startWait, endWait,
   isWaiting, resumePrompt, setRunUsageWait, settingsFileText, MAX_WAIT_HOURS, RETRY_WAIT_MS, overageStop,
+  newRunId, runFile, isLive, claimRun, ownedByOther, migrateLegacyRun, runForSession, findResumable, otherRunsText,
+  STALE_MS, HEARTBEAT_MS,
 } from '../plugin/lib/nightrunner.js'
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0)
@@ -179,7 +181,7 @@ test('configure reports the default and the run', () => {
   assert.match(configText(null, { saved: '150000', option: '300k' }), /^Default budget: 150k \(saved default\)\./)
   assert.match(configText(null, { option: '300k' }), /^Default budget: 300k \(plugin option\)\./)
   assert.match(configText(null, { saved: 'lots' }), /isn't a token count/)
-  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This folder's run: budget 50k \(run\), usage-limit wait on \(default\)\./)
+  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This tab's run: budget 50k \(run\), usage-limit wait on \(default\)\./)
 })
 
 test('on/off values', () => {
@@ -295,4 +297,90 @@ test('overage leaves an ended run alone, and ends a waiting one', () => {
   const waiting = startWait(newRun({ now: NOW }), { until: 'T', now: NOW })
   const stopped = overageStop(waiting, { reason: 'answer', rateLimits: [at('five_hour', 101)], now: NOW })
   assert.equal(isWaiting(stopped), false)
+})
+
+const tabRun = (id, { name = '', owner = 'tab-' + id, sessionId = 'sess-' + id, beatAgo = 0, active = true } = {}) => {
+  const r = newRun({ id, owner, sessionId, name, now: NOW - beatAgo })
+  return active ? r : endRun(r, 'complete', NOW)
+}
+
+test('run ids sort by start time and differ by a random suffix', () => {
+  assert.equal(newRunId(NOW, () => 0), '20261008-120000-0000')
+  assert.equal(newRunId(NOW, () => 0.5), '20261008-120000-8000')
+  assert.equal(runFile('abc'), '.nightrunner/runs/abc.json')
+})
+
+test('a run is live while its heartbeat is recent', () => {
+  assert.ok(HEARTBEAT_MS < STALE_MS)
+  assert.equal(isLive(tabRun('a'), NOW), true)
+  assert.equal(isLive(tabRun('a', { beatAgo: STALE_MS - 1 }), NOW), true)
+  assert.equal(isLive(tabRun('a', { beatAgo: STALE_MS }), NOW), false)
+  assert.equal(isLive(tabRun('a', { active: false }), NOW), false)
+  assert.equal(isLive({ ...tabRun('a'), heartbeatAt: null }, NOW), false)
+})
+
+test('a new run belongs to the tab and session that started it', () => {
+  const r = newRun({ id: 'x', owner: 'me', sessionId: 's1', now: NOW })
+  assert.deepEqual([r.id, r.owner, r.sessionId, r.heartbeatAt], ['x', 'me', 's1', new Date(NOW).toISOString()])
+})
+
+test('claiming a run moves it to this tab and session, and keeps its progress', () => {
+  const old = { ...tabRun('a', { beatAgo: STALE_MS * 2 }), session: 4, pendingNote: 'next' }
+  const mine = claimRun(old, { owner: 'me', sessionId: 's9', now: NOW })
+  assert.deepEqual([mine.owner, mine.sessionId, mine.heartbeatAt], ['me', 's9', new Date(NOW).toISOString()])
+  assert.deepEqual([mine.session, mine.pendingNote, mine.id], [4, 'next', 'a'])
+})
+
+test('a run file claimed by another tab is not this tab\'s to write', () => {
+  assert.equal(ownedByOther({ owner: 'other' }, 'me'), true)
+  assert.equal(ownedByOther({ owner: 'me' }, 'me'), false)
+  assert.equal(ownedByOther({ owner: null }, 'me'), false, 'a moved run has no owner yet')
+  assert.equal(ownedByOther(null, 'me'), false, 'no file yet')
+})
+
+test('a run from run.json gets a fixed id and no owner', () => {
+  const legacy = { ...newRun({ name: 'old', now: NOW }), id: undefined, owner: undefined, sessionId: undefined, session: 3 }
+  const moved = migrateLegacyRun(legacy)
+  assert.equal(moved.id, '20261008-120000-legacy')
+  assert.deepEqual(migrateLegacyRun(legacy), moved, 'two tabs moving it write the same file')
+  assert.deepEqual([moved.owner, moved.sessionId, moved.heartbeatAt, moved.session, moved.name], [null, null, null, 3, 'old'])
+  assert.equal(isLive(moved, NOW), false)
+})
+
+test('a resumed conversation finds its own active run, and no other', () => {
+  const runs = [tabRun('a'), tabRun('b'), tabRun('c', { active: false })]
+  assert.equal(runForSession(runs, 'sess-b').id, 'b')
+  assert.equal(runForSession(runs, 'sess-c'), null, 'an ended run stays ended')
+  assert.equal(runForSession(runs, 'sess-new'), null)
+  assert.equal(runForSession([{ ...tabRun('m'), sessionId: null }], null), null)
+})
+
+test('resume with no name takes the only orphaned run', () => {
+  const live = tabRun('live', { name: 'one' })
+  const orphan = tabRun('orph', { name: 'two', beatAgo: STALE_MS + 1 })
+  assert.equal(findResumable([live, orphan, tabRun('done', { active: false })], '', NOW).run.id, 'orph')
+  assert.match(findResumable([live], '', NOW).error, /live in another tab/)
+  assert.match(findResumable([], '', NOW).error, /no active run in this folder/)
+  const second = tabRun('orph2', { beatAgo: STALE_MS + 1 })
+  assert.match(findResumable([orphan, second], undefined, NOW).error, /several runs are orphaned: "two" \(orph\), orph2\. Name one/)
+})
+
+test('resume by name, id or id prefix, never a live run', () => {
+  const runs = [tabRun('20261008-1', { name: 'docs', beatAgo: STALE_MS + 1 }), tabRun('20261008-2', { name: 'api' })]
+  assert.equal(findResumable(runs, 'docs', NOW).run.id, '20261008-1')
+  assert.equal(findResumable(runs, '20261008-1', NOW).run.id, '20261008-1')
+  assert.match(findResumable(runs, '20261008', NOW).error, /matches several runs/)
+  assert.match(findResumable(runs, 'api', NOW).error, /"api" \(20261008-2\) is live in another tab .* try again in 3 minutes/)
+  assert.match(findResumable(runs, 'nope', NOW).error, /no active run in this folder matches "nope"/)
+})
+
+test('status lists the other runs in the folder, live or orphaned', () => {
+  const runs = [tabRun('mine'), tabRun('b', { name: 'api' }), { ...tabRun('c', { beatAgo: STALE_MS + 1 }), session: 2 }, tabRun('d', { active: false })]
+  const text = otherRunsText(runs, { ownId: 'mine', now: NOW })
+  assert.match(text, /^Other runs in this folder:\n/)
+  assert.match(text, /- "api" \(b\): live in another tab, session 1\./)
+  assert.match(text, /- c: orphaned \(no heartbeat since .*\), session 2\. Take it over with \/nightrunner resume c\./)
+  assert.doesNotMatch(text, /mine|\bd\b/)
+  assert.equal(otherRunsText([tabRun('mine')], { ownId: 'mine', now: NOW }), '')
+  assert.match(otherRunsText([migrateLegacyRun(newRun({ now: NOW }))], { ownId: undefined, now: NOW }), /moved from run\.json/)
 })
