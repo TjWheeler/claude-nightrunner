@@ -62,10 +62,10 @@ checked out there. After editing it, run `/reload-plugins` or open a new tab.
 ## Use
 
 ```
-/nightrunner start [name] [budget=150k] [wait=on|off]   start a run in this tab
-/nightrunner status                                    show the run, its settings, the context used and other runs in the folder
-/nightrunner stop                                      stop this tab's run
-/nightrunner resume [name|id]                          take over a run whose tab was closed
+/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off]   start a run in this tab
+/nightrunner status                       show the run, its settings, the context used and other runs in the folder
+/nightrunner stop                         stop this tab's run
+/nightrunner resume [name|id]             take over a run whose tab was closed
 ```
 
 The name is an optional label. Anything written as `key=value` is a setting, so
@@ -73,10 +73,10 @@ a name can't contain `=`.
 
 You can also ask Claude to start a run, for example "start a nightrunner run
 called docs with a 150k budget, then work through plans/docs.md". Claude uses
-the `start` tool (`mcp__nightrunner__start`), which takes the same name, budget
-and wait settings. The tool tells Claude to start a run only when you ask for
-one. Unless you've allowed the tool or are in auto mode, Claude Code asks you
-to approve the call.
+the `start` tool (`mcp__nightrunner__start`), which takes the same name, budget,
+wait and notify settings. The tool tells Claude to start a run only when you ask
+for one. Unless you've allowed the tool or are in auto mode, Claude Code asks
+you to approve the call.
 
 ### Several tabs
 
@@ -113,8 +113,8 @@ Then give Claude the work, and say how to hand over. For example:
 | Outcome | What happens |
 |---|---|
 | `continue` (needs a `note`) | Once the turn ends, the context is cleared and a new session starts with the note. |
-| `complete` | The run stops. |
-| `blocked` | The run stops, so you can answer Claude's question. Start a new run to carry on. |
+| `complete` | The run stops, and you get a [notification](#notifications). |
+| `blocked` (the note is the question) | The run stops and notifies you with the question, so you can answer it. Start a new run to carry on. |
 
 Only the main session can hand over, and only once per session. Sub-agents are
 refused.
@@ -200,11 +200,50 @@ you ask it to change nightrunner's settings:
   end of the next turn.
 - "Turn off the usage-limit wait for this project" writes
   `.claude/nightrunner.json`. "…for this run" changes only the active run.
+- "Turn off nightrunner notifications" saves it as your default. "…for this
+  project" or "…for this run" changes only that.
 - "What are my nightrunner settings?" reports them.
 
 Claude can start a run when you ask (see [Use](#use)). It can't stop one except
 by handing over with `complete` or `blocked`. You stop a run with
 `/nightrunner stop`.
+
+## Notifications
+
+When a run ends without you stopping it, nightrunner sends one notification
+through Claude Code. That covers `complete`, `blocked`, paid overage, a
+usage-limit reset too far off, and a wait that ran out. The notification names
+the run and why it ended, for example:
+
+```
+nightrunner "docs": blocked: Which database should the migration target?
+```
+
+For `blocked`, it carries the question Claude put in the handover note.
+Otherwise it never includes code or the run's work.
+
+It's Claude Code's own notification:
+
+- **Desktop:** it shows as a desktop notification.
+- **Phone:** it also reaches your phone in the Claude app when Remote Control is
+  connected and push notifications are on in Claude Code.
+- **While you're at the session:** Claude Code skips it, because you can already
+  see the run end.
+
+`/nightrunner status` shows whether the last run's notification was sent, or
+why not (for example `user_present`).
+
+Notifications are on by default. To turn them off:
+
+1. **This run only:** `/nightrunner start notify=off`, or ask Claude to change
+   it for the active run.
+2. **For a project:** put `"notify": false` in the project's
+   `.claude/nightrunner.json`, or ask Claude to ("turn off nightrunner
+   notifications for this project").
+3. **For every project:** put `"notify": false` in `~/.claude/nightrunner.json`,
+   or ask Claude to ("turn off nightrunner notifications by default").
+
+The first of these that is set wins, so a project or run can turn them back on.
 
 ## How its prompts appear
 
@@ -222,14 +261,12 @@ in it is committed.
 
 ## Limits
 
-This is an early release (0.1.3):
+This is an early release (0.1.4):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
   doesn't force one. Apart from paid overage, nothing stops a run on cost or
   session count. Watch a long run, or tell Claude in the prompt when to stop.
 - The usage-limit wait has been unit-tested but hasn't yet seen a real limit.
-- There are no notifications yet. A run that stops on a far-off reset just
-  stops.
 - Model, permissions and git are left as you set them. A permission prompt
   pauses the run until you answer it.
 - Runs in the same folder share its working tree. nightrunner keeps their
@@ -238,7 +275,7 @@ This is an early release (0.1.3):
   run.
 
 Later versions are planned to add a model pin, session and no-progress limits,
-notifications, guard rails and commits.
+guard rails and commits.
 
 ## Development
 

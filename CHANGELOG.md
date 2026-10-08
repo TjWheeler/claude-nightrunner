@@ -4,6 +4,27 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.4] - 2026-10-08
+
+### Added
+
+- Notifications. When a run ends without the user stopping it (`complete`,
+  `blocked`, paid overage, a usage-limit reset too far off, or a wait that ran
+  out), nightrunner sends one notification through Claude Code's push. It's a
+  desktop notification, and reaches the phone over Remote Control. It names the
+  run and why it ended, and for `blocked`, the question. Claude Code skips it
+  while the user is at the session. `/nightrunner status` shows whether it was
+  sent, or why not.
+- A `notify` setting to turn notifications off: per run (`notify=off` on
+  `/nightrunner start`, or the `start` tool), per project (`"notify": false` in
+  `.claude/nightrunner.json`) or for every project (`"notify": false` in
+  `~/.claude/nightrunner.json`). The `configure` tool sets all three.
+
+### Changed
+
+- The `handover` tool asks for the question as the note when the outcome is
+  `blocked`, so the notification can carry it.
+
 ## [0.1.3] - 2026-10-08
 
 ### Added

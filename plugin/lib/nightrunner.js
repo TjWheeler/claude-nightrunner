@@ -35,13 +35,13 @@ export const HANDOVER_TOOL = {
   description:
     'Ends this session of a nightrunner run. Call it from the main session only, once per session, as the last action of your turn. ' +
     'outcome "continue": nightrunner clears the context and starts the next session with your note, so record what was done and what comes next. ' +
-    '"blocked": a decision needs the user; ask them first, then call this, and the run stops. ' +
+    '"blocked": a decision needs the user; ask them first, then call this with the question in one line as the note, and the run stops and notifies them. ' +
     '"complete": the work is done and the run stops.',
   inputSchema: {
     type: 'object',
     properties: {
       outcome: { type: 'string', enum: OUTCOMES, description: 'continue, complete or blocked.' },
-      note: { type: 'string', description: `Required for continue, at most ${NOTE_LIMIT} characters: what you were doing, what is done and what comes next. The next session starts from it. Don't start it with "/".` },
+      note: { type: 'string', description: `Required for continue, at most ${NOTE_LIMIT} characters: what you were doing, what is done and what comes next. The next session starts from it. For blocked, the question for the user in one line; it goes in their notification, so no code or secrets. Don't start it with "/".` },
     },
     required: ['outcome'],
     additionalProperties: false,
@@ -68,6 +68,7 @@ export const START_TOOL = {
       name: { type: 'string', description: 'An optional label for the run.' },
       budget: { type: 'string', description: 'The context budget for this run, such as "150k". Leave it out to use the default.' },
       wait: { type: 'string', enum: ['on', 'off'], description: 'Whether the run waits for a usage-limit reset and carries on. Leave it out to use the default.' },
+      notify: { type: 'string', enum: ['on', 'off'], description: 'Whether the user is notified when the run ends without them stopping it. Leave it out to use the default.' },
     },
     additionalProperties: false,
   },
@@ -76,14 +77,14 @@ export const START_TOOL = {
 /** Pick the start tool's own fields off the hook event. */
 export function startInput(e) {
   const src = e?.input && typeof e.input === 'object' ? e.input : e ?? {}
-  return { name: src.name, budget: src.budget, wait: src.wait }
+  return { name: src.name, budget: src.budget, wait: src.wait, notify: src.notify }
 }
 
 /**
  * The start tool's input as /nightrunner start's parsed arguments.
- * @returns {{ ok: true, name: string, budget?: number, usageWait?: boolean } | { ok: false, error: string }}
+ * @returns {{ ok: true, name: string, budget?: number, usageWait?: boolean, notify?: boolean } | { ok: false, error: string }}
  */
-export function validateStart({ name, budget, wait } = {}) {
+export function validateStart({ name, budget, wait, notify } = {}) {
   const out = { ok: true, name: typeof name === 'string' ? name.trim() : '' }
   if (name !== undefined && typeof name !== 'string') return { ok: false, error: 'name must be text.' }
   if (budget !== undefined) {
@@ -96,6 +97,11 @@ export function validateStart({ name, budget, wait } = {}) {
     if (v === null) return { ok: false, error: `wait must be on or off; got "${wait}".` }
     out.usageWait = v
   }
+  if (notify !== undefined) {
+    const v = parseOnOff(notify)
+    if (v === null) return { ok: false, error: `notify must be on or off; got "${notify}".` }
+    out.notify = v
+  }
   return out
 }
 
@@ -106,7 +112,10 @@ export const CONFIGURE_TOOL = {
     'defaultBudget saves the user\'s default context budget for every project ("150k", or "default" to go back to the built-in 200k). ' +
     "runBudget changes the budget of this tab's active run. " +
     'projectUsageWait sets whether runs in this project wait out a usage limit and carry on ("on", "off", or "default" to remove the project setting; it is written to .claude/nightrunner.json, which the user may commit). ' +
-    'runUsageWait sets it for the active run. Only change what the user asked for. Main session only.',
+    'runUsageWait sets it for the active run. ' +
+    'defaultNotify sets whether the user is notified when a run ends without them stopping it, for every project ("on", "off", or "default" to remove it; saved in ~/.claude/nightrunner.json). ' +
+    'projectNotify sets it for this project (written to .claude/nightrunner.json), and runNotify for the active run. ' +
+    'Only change what the user asked for. Main session only.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -114,6 +123,9 @@ export const CONFIGURE_TOOL = {
       runBudget: { type: 'string', description: 'The context budget for this tab\'s active run, such as "150k". Needs an active run.' },
       projectUsageWait: { type: 'string', enum: ['on', 'off', 'default'], description: "Whether this project's runs wait for a usage-limit reset and carry on. \"default\" removes the project setting (on)." },
       runUsageWait: { type: 'string', enum: ['on', 'off'], description: 'Whether the active run waits for a usage-limit reset and carries on. Needs an active run.' },
+      defaultNotify: { type: 'string', enum: ['on', 'off', 'default'], description: 'Whether runs in every project notify the user when they end without the user stopping them. "default" removes the setting (on).' },
+      projectNotify: { type: 'string', enum: ['on', 'off', 'default'], description: "Whether this project's runs notify the user when they end. \"default\" removes the project setting." },
+      runNotify: { type: 'string', enum: ['on', 'off'], description: 'Whether the active run notifies the user when it ends. Needs an active run.' },
     },
     additionalProperties: false,
   },
@@ -122,14 +134,17 @@ export const CONFIGURE_TOOL = {
 /** Pick the configure tool's own fields off the hook event. */
 export function configureInput(e) {
   const src = e?.input && typeof e.input === 'object' ? e.input : e ?? {}
-  return { defaultBudget: src.defaultBudget, runBudget: src.runBudget, projectUsageWait: src.projectUsageWait, runUsageWait: src.runUsageWait }
+  return {
+    defaultBudget: src.defaultBudget, runBudget: src.runBudget, projectUsageWait: src.projectUsageWait, runUsageWait: src.runUsageWait,
+    defaultNotify: src.defaultNotify, projectNotify: src.projectNotify, runNotify: src.runNotify,
+  }
 }
 
 /**
  * @returns {{ ok: true, value: { defaultBudget?: string, runBudget?: number } } | { ok: false, error: string }}
  * defaultBudget comes back as the option's stored text: "" clears it.
  */
-export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, runUsageWait } = {}, { runActive }) {
+export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, runUsageWait, defaultNotify, projectNotify, runNotify } = {}, { runActive }) {
   const value = {}
   if (defaultBudget !== undefined) {
     const text = String(defaultBudget).trim()
@@ -160,7 +175,24 @@ export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, 
     if (!runActive) return { ok: false, error: 'runUsageWait needs an active run, and none is active. projectUsageWait sets it for future runs in this project.' }
     value.runUsageWait = v
   }
+  for (const [key, given] of [['defaultNotify', defaultNotify], ['projectNotify', projectNotify]]) {
+    if (given === undefined) continue
+    if (/^default$/i.test(String(given).trim())) { value[key] = 'default'; continue }
+    const v = parseOnOff(given)
+    if (v === null) return { ok: false, error: `${key} must be on, off or default; got "${given}".` }
+    value[key] = v
+  }
+  if (runNotify !== undefined) {
+    const v = parseOnOff(runNotify)
+    if (v === null) return { ok: false, error: `runNotify must be on or off; got "${runNotify}".` }
+    if (!runActive) return { ok: false, error: 'runNotify needs an active run, and none is active. projectNotify or defaultNotify set it for future runs.' }
+    value.runNotify = v
+  }
   return { ok: true, value }
+}
+
+export function setRunNotify(run, notify) {
+  return { ...run, notify, notifySource: 'set by configure' }
 }
 
 export function setRunUsageWait(run, usageWait) {
@@ -175,7 +207,7 @@ export function setRunBudget(run, budget) {
 }
 
 /** What the configure tool reports: the default runs start with, and the active run's budget. */
-export function configText(run, { saved, option, project } = {}) {
+export function configText(run, { saved, option, project, projectNotify, userNotify } = {}) {
   const resolved = resolveBudget({ saved, option })
   const def = resolved.error
     ? `Default budget: ${resolved.error}`
@@ -186,10 +218,12 @@ export function configText(run, { saved, option, project } = {}) {
   const wait = w.error
     ? `Usage-limit wait: ${w.error}`
     : `Usage-limit wait for this project: ${onOff(w.usageWait)} (${w.source === 'project' ? 'project file' : 'built-in default'}).`
+  const n = resolveNotify({ project: projectNotify, user: userNotify })
+  const notify = n.error ? `Notifications: ${n.error}` : `Notifications for this project: ${onOff(n.notify)} (${NOTIFY_SOURCES[n.source]}).`
   const current = isActive(run)
-    ? `This tab's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}).`
+    ? `This tab's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}), notifications ${onOff(run.notify ?? true)} (${NOTIFY_SOURCES[run.notifySource] ?? run.notifySource ?? 'built-in default'}).`
     : 'No run active in this tab.'
-  return `${def}\n${wait}\n${current}\nA run started with /nightrunner start budget=… wait=on|off uses those instead.`
+  return `${def}\n${wait}\n${notify}\n${current}\nA run started with /nightrunner start budget=… wait=on|off notify=on|off uses those instead.`
 }
 
 /** The host passes the tool's fields on the event, beside its own. */
@@ -230,13 +264,13 @@ export function parseStartArgs(words) {
     if (eq < 0) { name.push(w); continue }
     const key = w.slice(0, eq)
     const value = w.slice(eq + 1)
-    if (key === 'wait') {
-      const wait = parseOnOff(value)
-      if (wait === null) return { ok: false, error: `wait must be on or off; got "${value}".` }
-      out.usageWait = wait
+    if (key === 'wait' || key === 'notify') {
+      const v = parseOnOff(value)
+      if (v === null) return { ok: false, error: `${key} must be on or off; got "${value}".` }
+      out[key === 'wait' ? 'usageWait' : 'notify'] = v
       continue
     }
-    if (key !== 'budget') return { ok: false, error: `unknown setting "${key}". The run settings are budget (e.g. budget=150k) and wait (wait=on or wait=off).` }
+    if (key !== 'budget') return { ok: false, error: `unknown setting "${key}". The run settings are budget (e.g. budget=150k), wait (wait=on or wait=off) and notify (notify=on or notify=off).` }
     const budget = parseTokens(value)
     if (budget === null) return { ok: false, error: `budget must be a token count of at least 1000, such as 150k or 150000; got "${value}".` }
     out.budget = budget
@@ -291,6 +325,24 @@ export function resolveUsageWait({ arg, project }) {
   return { usageWait: true, source: 'default' }
 }
 
+const NOTIFY_SOURCES = { run: 'run', project: 'project file', user: 'your default', default: 'built-in default' }
+
+/**
+ * Whether a run notifies the user when it ends: the run argument, then the
+ * project file, then the user file, then on.
+ * @returns {{ notify: boolean, source: 'run' | 'project' | 'user' | 'default' } | { error: string }}
+ */
+export function resolveNotify({ arg, project, user }) {
+  if (arg !== undefined) return { notify: arg, source: 'run' }
+  for (const [source, value, file] of [['project', project, PROJECT_FILE], ['user', user, `~/${USER_FILE}`]]) {
+    if (value === undefined || value === null) continue
+    const v = parseOnOff(value)
+    if (v === null) return { error: `notify in ${file} must be true or false; got ${JSON.stringify(value)}.` }
+    return { notify: v, source }
+  }
+  return { notify: true, source: 'default' }
+}
+
 /** The user file's settings; anything unreadable counts as none. */
 export function parseUserFile(text) {
   try {
@@ -314,9 +366,9 @@ export function settingsFileText(current, key, value) {
   return JSON.stringify(next, null, 2) + '\n'
 }
 
-export function newRun({ id = null, owner = null, sessionId = null, name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', now }) {
+export function newRun({ id = null, owner = null, sessionId = null, name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', notify = true, notifySource = 'default', now }) {
   return {
-    version: 1, id, owner, sessionId, heartbeatAt: new Date(now).toISOString(), active: true, name, budget, budgetSource, usageWait, usageWaitSource,
+    version: 1, id, owner, sessionId, heartbeatAt: new Date(now).toISOString(), active: true, name, budget, budgetSource, usageWait, usageWaitSource, notify, notifySource,
     startedAt: new Date(now).toISOString(), session: 1, handedOverIn: null, nudgedIn: null, pendingNote: null,
     waitUntil: null, waitingSince: null, endedAt: null, endReason: null,
   }
@@ -446,6 +498,40 @@ export function overageStop(run, { reason, stopFailureError, rateLimits = [], no
   return endRun(run, `paid overage: the ${w.kind} usage limit is at ${w.percentUsed}%, so further turns would be billed as overage`, now)
 }
 
+// The push tool's limit; mobile systems cut longer messages.
+export const NOTIFICATION_LIMIT = 200
+
+/**
+ * The one-line notification for a run that ended without the user stopping
+ * it: the run, why it ended, and for "blocked" the question. Never more.
+ */
+export function notificationText(run, detail = '') {
+  const oneLine = s => String(s ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  const who = run.name ? `"${oneLine(run.name)}"` : 'run'
+  const why = oneLine(detail)
+  const text = `nightrunner ${who}: ${oneLine(run.endReason)}${why ? `: ${why}` : ''}`
+  return text.length > NOTIFICATION_LIMIT ? `${text.slice(0, NOTIFICATION_LIMIT - 1)}…` : text
+}
+
+/** What the push tool's result says happened, kept with the run. */
+export function notificationRecord(result) {
+  if (result?.deny) return { sent: false, why: String(result.deny) }
+  const r = result?.result && typeof result.result === 'object' ? result.result : {}
+  const sent = Boolean(r.pushSent || r.localSent)
+  const why = r.disabledReason ?? (sent || !result?.isError ? undefined : result?.text)
+  return {
+    sent, ...(r.pushSent !== undefined && { pushSent: Boolean(r.pushSent) }),
+    ...(r.localSent !== undefined && { localSent: Boolean(r.localSent) }), ...(why && { why: String(why) }),
+  }
+}
+
+/** The status line for a run's notification. */
+export function notificationLine(n) {
+  if (!n) return ''
+  if (n.sent) return `Notified ${n.pushSent ? 'by push' : 'on the desktop'} at ${n.at}.`
+  return `No notification was sent${n.why ? ` (${n.why})` : ''}.`
+}
+
 /** One nudge per session, once context reaches the budget and no handover is recorded. */
 export function shouldNudge(run, { tokens, sessionId }) {
   return isActive(run) && typeof tokens === 'number' && tokens >= (run.budget ?? DEFAULT_BUDGET) &&
@@ -528,9 +614,12 @@ export function contextLine(run, context) {
 
 export function statusText(run, context) {
   const ctx = context === undefined ? '' : `\n${contextLine(run, context)}`
-  if (!isActive(run)) return (run?.endReason ? `No run active. The last run ended: ${run.endReason}.` : 'No run active.') + ctx
+  if (!isActive(run)) {
+    const notified = notificationLine(run?.notification)
+    return (run?.endReason ? `No run active. The last run ended: ${run.endReason}.${notified ? ` ${notified}` : ''}` : 'No run active.') + ctx
+  }
   const waiting = run.waitUntil ? ` Waiting for the usage limit to reset; carrying on at ${run.waitUntil}.` : ''
-  return `Run ${run.name ? `"${run.name}" ` : ''}active, session ${run.session}, started ${run.startedAt}. Context budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}). Usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}).${waiting}` + ctx
+  return `Run ${run.name ? `"${run.name}" ` : ''}active, session ${run.session}, started ${run.startedAt}. Context budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}). Usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}). Notifications ${onOff(run.notify ?? true)} (${NOTIFY_SOURCES[run.notifySource] ?? run.notifySource ?? 'built-in default'}).${waiting}` + ctx
 }
 
 export const NO_RUN = 'No nightrunner run is active, so there is nothing to hand over. Start one with /nightrunner start.'

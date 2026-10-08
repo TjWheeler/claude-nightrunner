@@ -9,7 +9,7 @@
 
 import {
   RUNS_DIR, LEGACY_RUN_FILE, HEARTBEAT_MS, runFile, newRunId, claimRun, ownedByOther, migrateLegacyRun,
-  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, START_TOOL, startInput, validateStart, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
+  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, START_TOOL, startInput, validateStart, notificationText, notificationRecord, resolveNotify, setRunNotify, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
   handoverInput, validateHandover, newRun, parseRun, isActive, applyHandover,
   endRun, beginNextSession, statusText, parseStartArgs, resolveBudget,
   shouldNudge, nudgePrompt, formatTokens, configureInput, validateConfigure, setRunBudget,
@@ -21,7 +21,7 @@ const HANDOVER = 'mcp__nightrunner__handover'
 const STATUS = 'mcp__nightrunner__status'
 const CONFIGURE = 'mcp__nightrunner__configure'
 const START = 'mcp__nightrunner__start'
-const HELP = '/nightrunner start [name] [budget=150k] [wait=on|off] | stop | status | resume [name|id]'
+const HELP = '/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off] | stop | status | resume [name|id]'
 
 // Which tab owns a run: a token for this process, kept in the run's file.
 const owner = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -134,6 +134,29 @@ async function readProjectFile($) {
   try { return parseUserFile(await $.fs.read(PROJECT_FILE)) } catch { return {} }
 }
 
+// The run ended without the user stopping it: tell them through Claude Code's
+// notification, which also reaches the phone over Remote Control and is skipped
+// while they're at the session. Sent from a timer, not the hook that ended the
+// run, and kept with the run so status can say what happened.
+function notifyEnded($, detail) {
+  const ended = run
+  if (!ended?.id || ended.notify === false) return
+  const text = notificationText(ended, detail)
+  $.clock.after(500, () => { void sendNotification($, ended.id, text) })
+}
+
+async function sendNotification($, id, text) {
+  let record
+  try {
+    record = notificationRecord(await $.tool.call({ tool: 'PushNotification', message: text, status: 'proactive' }))
+  } catch (err) {
+    record = { sent: false, why: String(err) }
+  }
+  if (run?.id !== id) return
+  run = { ...run, notification: { text, at: new Date().toISOString(), ...record } }
+  await save($)
+}
+
 // Paid overage is in use: end the run, dropping any pending clear or wait.
 // True when the run ended.
 async function stopIfOverage($, turnEnd) {
@@ -146,6 +169,7 @@ async function stopIfOverage($, turnEnd) {
     if (waitTimer) { waitTimer.cancel(); waitTimer = null }
     await save($)
     $.ui.invalidate('tool.describe')
+    notifyEnded($)
     return true
   } catch { return false }
 }
@@ -165,6 +189,7 @@ async function checkUsageLimit($, stopFailureError) {
     if (plan.action === 'stop') {
       run = endRun(run, plan.reason, now)
       await save($)
+      notifyEnded($)
       return
     }
     run = startWait(run, { until: plan.until, now })
@@ -205,13 +230,15 @@ async function startRun($, args) {
   if (resolved.error) return { started: false, text: `Run not started: ${resolved.error}` }
   const wait = resolveUsageWait({ arg: args.usageWait, project: (await readProjectFile($)).usageWait })
   if (wait.error) return { started: false, text: `Run not started: ${wait.error}` }
+  const notify = resolveNotify({ arg: args.notify, project: (await readProjectFile($)).notify, user: (await readUserFile($)).notify })
+  if (notify.error) return { started: false, text: `Run not started: ${notify.error}` }
   const now = Date.now()
-  run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, now })
+  run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, notify: notify.notify, notifySource: notify.source, now })
   clearPending = startPending = false
   await $.fs.write(GITIGNORE, GITIGNORE_TEXT)
   await save($, { claim: true })
   $.ui.invalidate('tool.describe')
-  return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
+  return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}), notifications ${run.notify ? 'on' : 'off'} (${run.notifySource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
 }
 
 // The session's context as $.session.usage() reports it, or null.
@@ -291,12 +318,29 @@ export function register(on, opts) {
         await save($)
         done.push(`This run's usage-limit wait is now ${checked.value.runUsageWait ? 'on' : 'off'}.`)
       }
+      if (checked.value.defaultNotify !== undefined) {
+        const v = checked.value.defaultNotify
+        const path = await userFilePath($)
+        if (!path) return { deny: "nightrunner: the default wasn't saved: HOME is not set, so there is nowhere to save it." }
+        await $.fs.write(path, settingsFileText(await readUserFile($), 'notify', v === 'default' ? undefined : v))
+        done.push(v === 'default' ? 'Removed your notify default, so runs notify (the default).' : `Your runs now ${v ? 'notify you' : "don't notify you"} by default, in every project.`)
+      }
+      if (checked.value.projectNotify !== undefined) {
+        const v = checked.value.projectNotify
+        await $.fs.write(PROJECT_FILE, settingsFileText(await readProjectFile($), 'notify', v === 'default' ? undefined : v))
+        done.push(v === 'default' ? `Removed notify from ${PROJECT_FILE}.` : `Set notify to ${v ? 'on' : 'off'} in ${PROJECT_FILE}. Commit it to share it with the project.`)
+      }
+      if (checked.value.runNotify !== undefined) {
+        run = setRunNotify(run, checked.value.runNotify)
+        await save($)
+        done.push(`This run's notifications are now ${checked.value.runNotify ? 'on' : 'off'}.`)
+      }
       if (checked.value.runBudget !== undefined) {
         run = setRunBudget(run, checked.value.runBudget)
         await save($)
         done.push(`This run's budget is now ${formatTokens(run.budget)}.`)
       }
-      return { result: [...done, configText(run, { ...(await budgetDefaults($)), project: (await readProjectFile($)).usageWait })].join('\n') }
+      return { result: [...done, configText(run, { ...(await budgetDefaults($)), project: (await readProjectFile($)).usageWait, projectNotify: (await readProjectFile($)).notify, userNotify: (await readUserFile($)).notify })].join('\n') }
     } catch (err) {
       return { deny: `nightrunner: configure failed (${String(err)}). Tell the user.` }
     }
@@ -334,6 +378,7 @@ export function register(on, opts) {
       run = applied.run
       clearPending = applied.clear
       await save($)
+      if (!isActive(run)) notifyEnded($, checked.value.outcome === 'blocked' ? checked.value.note : '')
       return { result: applied.result }
     } catch (err) {
       return { deny: `nightrunner: the handover failed (${String(err)}). Tell the user.` }

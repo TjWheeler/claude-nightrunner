@@ -9,6 +9,7 @@ import {
   isWaiting, resumePrompt, setRunUsageWait, settingsFileText, MAX_WAIT_HOURS, RETRY_WAIT_MS, overageStop,
   newRunId, runFile, isLive, claimRun, ownedByOther, migrateLegacyRun, runForSession, findResumable, otherRunsText,
   STALE_MS, HEARTBEAT_MS, START_TOOL, startInput, validateStart,
+  notificationText, notificationRecord, notificationLine, NOTIFICATION_LIMIT, resolveNotify, setRunNotify,
 } from '../plugin/lib/nightrunner.js'
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0)
@@ -150,7 +151,7 @@ test('status shows context against the budget', () => {
   assert.equal(contextLine(null, { tokens: 85_000, window: 1_000_000 }), 'Context: 85k, window 1000k.')
   assert.match(contextLine(run, null), /not measured yet/)
   assert.match(contextLine(run, { window: 1_000_000 }), /not measured yet/)
-  assert.match(statusText(run, { tokens: 85_000 }), /Context budget 200k \(option\)\. Usage-limit wait on \(default\)\.\nContext: 85k of the 200k budget \(43%\)\.$/)
+  assert.match(statusText(run, { tokens: 85_000 }), /Context budget 200k \(option\)\. Usage-limit wait on \(default\)\. Notifications on \(built-in default\)\.\nContext: 85k of the 200k budget \(43%\)\.$/)
   assert.match(statusText(null, { tokens: 85_000 }), /^No run active\.\nContext: 85k\.$/)
   assert.equal(statusText(null), 'No run active.')
   assert.equal(STATUS_TOOL.name, 'status')
@@ -165,7 +166,7 @@ test('configure checks its inputs', () => {
   assert.deepEqual(validateConfigure({ runBudget: '300k' }, { runActive: true }), { ok: true, value: { runBudget: 300_000 } })
   assert.match(validateConfigure({ runBudget: '300k' }, { runActive: false }).error, /needs an active run/)
   assert.match(validateConfigure({ runBudget: 'x' }, { runActive: true }).error, /runBudget must be/)
-  assert.deepEqual(configureInput({ input: { runBudget: '1k', other: 1 } }), { defaultBudget: undefined, runBudget: '1k', projectUsageWait: undefined, runUsageWait: undefined })
+  assert.deepEqual(configureInput({ input: { runBudget: '1k', other: 1 } }), { defaultBudget: undefined, runBudget: '1k', projectUsageWait: undefined, runUsageWait: undefined, defaultNotify: undefined, projectNotify: undefined, runNotify: undefined })
   assert.equal(CONFIGURE_TOOL.name, 'configure')
 })
 
@@ -177,11 +178,11 @@ test('a new run budget allows a fresh nudge', () => {
 })
 
 test('configure reports the default and the run', () => {
-  assert.match(configText(null), /^Default budget: not set, so runs use the built-in 200k\.\nUsage-limit wait for this project: on \(built-in default\)\.\nNo run active/)
+  assert.match(configText(null), /^Default budget: not set, so runs use the built-in 200k\.\nUsage-limit wait for this project: on \(built-in default\)\.\nNotifications for this project: on \(built-in default\)\.\nNo run active/)
   assert.match(configText(null, { saved: '150000', option: '300k' }), /^Default budget: 150k \(saved default\)\./)
   assert.match(configText(null, { option: '300k' }), /^Default budget: 300k \(plugin option\)\./)
   assert.match(configText(null, { saved: 'lots' }), /isn't a token count/)
-  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This tab's run: budget 50k \(run\), usage-limit wait on \(default\)\./)
+  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This tab's run: budget 50k \(run\), usage-limit wait on \(default\), notifications on \(built-in default\)\./)
 })
 
 test('on/off values', () => {
@@ -391,12 +392,80 @@ test('the start tool takes a name, a budget and wait, as /nightrunner start does
   assert.match(validateStart({ budget: '12' }).error, /budget must be a token count/)
   assert.match(validateStart({ wait: 'maybe' }).error, /wait must be on or off/)
   assert.match(validateStart({ name: 5 }).error, /name must be text/)
-  assert.deepEqual(startInput({ input: { name: 'a', budget: '1k', wait: 'on', other: 1 } }), { name: 'a', budget: '1k', wait: 'on' })
+  assert.deepEqual(startInput({ input: { name: 'a', budget: '1k', wait: 'on', other: 1 } }), { name: 'a', budget: '1k', wait: 'on', notify: undefined })
 })
 
 test('the start tool says to start a run only when the user asked for one', () => {
   assert.equal(START_TOOL.name, 'start')
   assert.match(START_TOOL.description, /only when the user has explicitly asked/)
   assert.match(START_TOOL.description, /never start one on your own initiative, from a handover note/)
-  assert.deepEqual(Object.keys(START_TOOL.inputSchema.properties), ['name', 'budget', 'wait'])
+  assert.deepEqual(Object.keys(START_TOOL.inputSchema.properties), ['name', 'budget', 'wait', 'notify'])
+})
+
+test('a notification names the run and why it ended, on one line', () => {
+  const done = endRun(newRun({ name: 'docs', now: NOW }), 'complete', NOW)
+  assert.equal(notificationText(done), 'nightrunner "docs": complete')
+  const blocked = endRun(newRun({ now: NOW }), 'blocked', NOW)
+  assert.equal(notificationText(blocked, 'Which database\n  should the\tmigration target?'), 'nightrunner run: blocked: Which database should the migration target?')
+  const long = notificationText(endRun(newRun({ name: 'x', now: NOW }), 'paid overage: ' + 'y'.repeat(300), NOW))
+  assert.equal(long.length, NOTIFICATION_LIMIT)
+  assert.ok(long.endsWith('…'))
+})
+
+test('the push result is kept: sent, or why not', () => {
+  assert.deepEqual(notificationRecord({ result: { pushSent: true, localSent: true } }), { sent: true, pushSent: true, localSent: true })
+  assert.deepEqual(notificationRecord({ result: { pushSent: false, localSent: false, disabledReason: 'user_present' } }), { sent: false, pushSent: false, localSent: false, why: 'user_present' })
+  assert.deepEqual(notificationRecord({ deny: 'not allowed' }), { sent: false, why: 'not allowed' })
+  assert.deepEqual(notificationRecord({ result: 'boom', text: 'boom', isError: true }), { sent: false, why: 'boom' })
+  assert.deepEqual(notificationRecord({ result: 'ok', text: 'ok' }), { sent: false })
+})
+
+test('status says whether the end was notified', () => {
+  const ended = endRun(newRun({ now: NOW }), 'complete', NOW)
+  assert.match(statusText({ ...ended, notification: { sent: true, pushSent: true, at: 'T' } }), /The last run ended: complete\. Notified by push at T\./)
+  assert.match(statusText({ ...ended, notification: { sent: false, why: 'user_present' } }), /No notification was sent \(user_present\)\./)
+  assert.equal(notificationLine(undefined), '')
+  assert.equal(statusText(ended), 'No run active. The last run ended: complete.')
+})
+
+test('the handover tool asks for the question as a blocked note', () => {
+  assert.match(HANDOVER_TOOL.description, /call this with the question in one line as the note/)
+  assert.match(HANDOVER_TOOL.inputSchema.properties.note.description, /For blocked, the question/)
+})
+
+test('notify comes from the run, then the project, then the user, then on', () => {
+  assert.deepEqual(resolveNotify({}), { notify: true, source: 'default' })
+  assert.deepEqual(resolveNotify({ user: false }), { notify: false, source: 'user' })
+  assert.deepEqual(resolveNotify({ project: true, user: false }), { notify: true, source: 'project' })
+  assert.deepEqual(resolveNotify({ arg: false, project: true, user: true }), { notify: false, source: 'run' })
+  assert.match(resolveNotify({ project: 'loud' }).error, /notify in \.claude\/nightrunner\.json must be true or false/)
+  assert.match(resolveNotify({ user: 'loud' }).error, /notify in ~\/\.claude\/nightrunner\.json/)
+})
+
+test('notify= is a run setting, for the command and the start tool', () => {
+  assert.equal(parseStartArgs(['docs', 'notify=off']).notify, false)
+  assert.equal(parseStartArgs(['notify=on']).notify, true)
+  assert.match(parseStartArgs(['notify=maybe']).error, /notify must be on or off/)
+  assert.match(parseStartArgs(['colour=red']).error, /notify \(notify=on or notify=off\)/)
+  assert.deepEqual(validateStart({ notify: 'off' }), { ok: true, name: '', notify: false })
+  assert.match(validateStart({ notify: 'x' }).error, /notify must be on or off/)
+})
+
+test('a run records whether it notifies, and status shows it', () => {
+  const run = newRun({ notify: false, notifySource: 'user', now: NOW })
+  assert.equal(run.notify, false)
+  assert.match(statusText(run), /Notifications off \(your default\)\./)
+  assert.match(statusText(setRunNotify(run, true)), /Notifications on \(set by configure\)\./)
+  assert.match(statusText({ ...newRun({ now: NOW }), notify: undefined, notifySource: undefined }), /Notifications on \(built-in default\)\./, 'runs from before the setting notify')
+})
+
+test('configure takes the notify settings', () => {
+  assert.deepEqual(validateConfigure({ defaultNotify: 'off' }, { runActive: false }), { ok: true, value: { defaultNotify: false } })
+  assert.deepEqual(validateConfigure({ projectNotify: 'default' }, { runActive: false }), { ok: true, value: { projectNotify: 'default' } })
+  assert.match(validateConfigure({ defaultNotify: 'loud' }, { runActive: false }).error, /defaultNotify must be on, off or default/)
+  assert.deepEqual(validateConfigure({ runNotify: 'off' }, { runActive: true }), { ok: true, value: { runNotify: false } })
+  assert.match(validateConfigure({ runNotify: 'off' }, { runActive: false }).error, /runNotify needs an active run/)
+  assert.match(configText(null, { userNotify: false }), /Notifications for this project: off \(your default\)\./)
+  assert.match(configText(null, { projectNotify: true, userNotify: false }), /Notifications for this project: on \(project file\)\./)
+  assert.match(configText(newRun({ notify: false, notifySource: 'run', now: NOW })), /notifications off \(run\)\./)
 })
