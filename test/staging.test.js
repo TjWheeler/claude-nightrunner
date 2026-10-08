@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { matchPattern, exclusionPatterns, secretPatterns, addArgs, parseNameStatusZ, checkStaged, DEFAULT_SECRET_PATTERNS } from '../plugin/lib/staging.js'
 
-test('the default secret patterns are decision 12', () => {
+test('the default secret patterns', () => {
   assert.deepEqual(DEFAULT_SECRET_PATTERNS, ['.env*', '*.pem', '*.key', '*.p12', '*.pfx', '*.keystore', 'id_rsa*', 'id_ed25519*',
     '.npmrc', '.pypirc', 'credentials*.json', '*.tfstate*'])
 })

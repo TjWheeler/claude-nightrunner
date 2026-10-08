@@ -12,7 +12,7 @@ const make = (over = {}) => {
 const handover = (outcome = 'continue', extra = {}) => ({ outcome, reason: 'r', note: outcome === 'continue' ? 'next' : undefined, ...extra })
 
 describe('ids and branches', () => {
-  test('run id format (decision 5)', () => {
+  test('run id format', () => {
     assert.equal(rs.newRunId(Date.parse('2026-10-08T21:05:09Z'), '0f3a'), '20261008-210509-0f3a')
     assert.ok(rs.isValidRunId('20261008-210509-0f3a'))
     assert.ok(!rs.isValidRunId('../x'))
@@ -32,7 +32,7 @@ describe('start checks', () => {
   test('a working branch with valid settings starts', () => {
     assert.deepEqual(rs.startChecks(base), { ok: true, errors: [] })
   })
-  test('a protected branch is refused with the reason (Q-6)', () => {
+  test('a protected branch is refused with the reason', () => {
     const r = rs.startChecks({ ...base, branch: 'main' })
     assert.equal(r.ok, false)
     assert.match(r.errors[0], /"main" is a protected branch.*never creates one/)
@@ -64,7 +64,7 @@ describe('start checks', () => {
   })
 })
 
-describe('ownership (decision 7)', () => {
+describe('ownership', () => {
   test('fresh, stale, mine, suspended, none', () => {
     const run = make()
     assert.equal(rs.ownership(run, { now: T0, pid: 10 }), 'mine')
@@ -93,7 +93,7 @@ describe('handovers', () => {
       assert.equal(rs.reportedOutcome(o), o)
     }
   })
-  test('the session limit ends the run on the last session\'s continue (Q-7)', () => {
+  test('the session limit ends the run on the last session\'s continue', () => {
     let run = make({ sessionLimit: '2' })
     run = rs.applyHandover(run, handover(), { sessionId: 's1', runCommits: 1, now: T0 }).run
     run = rs.beginSession(run, { sessionId: 's2', head: 'h1', now: T0 })
@@ -102,7 +102,7 @@ describe('handovers', () => {
     assert.equal(r.endReason, 'session-limit')
     assert.equal(rs.reportedOutcome('session-limit'), 'error')
   })
-  test('the no-progress limit counts consecutive sessions without a run commit (D-26)', () => {
+  test('the no-progress limit counts consecutive sessions without a run commit', () => {
     let run = make()
     for (let i = 1; i <= 2; i++) {
       const r = rs.applyHandover(run, handover(), { sessionId: `s${i}`, runCommits: 0, now: T0 })
@@ -128,7 +128,7 @@ describe('handovers', () => {
     assert.equal(r.run.noProgressCount, 2, 'no marker is no progress')
     assert.equal(r.run.lastProgressMarker, 'step 1')
   })
-  test('a stop request turns the next continue into the end (acceptance 11)', () => {
+  test('a stop request turns the next continue into the end', () => {
     const flagged = rs.requestStop(make(), { turnRunning: true, now: T0 })
     assert.equal(flagged.action, 'flagged')
     const r = rs.applyHandover(flagged.run, handover(), { sessionId: 's1', runCommits: 1, now: T0 })
@@ -150,12 +150,12 @@ describe('handovers', () => {
 })
 
 describe('turns, nudges and the hard stop', () => {
-  test('a turn ending without a handover goes idle; with one, clears (D-12)', () => {
+  test('a turn ending without a handover goes idle; with one, clears', () => {
     assert.equal(rs.onTurnComplete(make(), { now: T0 }).action, 'idle')
     const run = rs.applyHandover(make(), handover(), { sessionId: 's1', runCommits: 1, now: T0 }).run
     assert.equal(rs.onTurnComplete(run, { now: T0 }).action, 'clear')
   })
-  test('three nudges in a row, then the run ends as an error (D-18)', () => {
+  test('three nudges in a row, then the run ends as an error', () => {
     let run = make()
     for (let i = 0; i < rs.MAX_NUDGES; i++) {
       const r = rs.onIdle(run, { now: T0 })
@@ -175,7 +175,7 @@ describe('turns, nudges and the hard stop', () => {
     const run = rs.applyHandover(make(), handover(), { sessionId: 's1', runCommits: 1, now: T0 }).run
     assert.equal(rs.onIdle(run, { now: T0 }).action, 'none')
   })
-  test('the hard stop aborts once, prompts, then ends if no handover follows (D-22)', () => {
+  test('the hard stop aborts once, prompts, then ends if no handover follows', () => {
     let r = rs.onContext(make(), 250000)
     assert.equal(r.action, 'none')
     assert.equal(r.run.session.peakContext, 250000)
@@ -195,7 +195,7 @@ describe('turns, nudges and the hard stop', () => {
   })
 })
 
-describe('waits, suspension and resume (D-21, D-25)', () => {
+describe('waits, suspension and resume', () => {
   test('a wait keeps the session; finishing it marks the next prompt as after a wait', () => {
     let run = rs.enterWait(make(), { until: '2026-10-08T23:32:00Z' })
     assert.equal(run.status, 'waiting')
@@ -222,7 +222,7 @@ describe('waits, suspension and resume (D-21, D-25)', () => {
   })
 })
 
-describe('the model pin check (D-23)', () => {
+describe('the model pin check', () => {
   test('matches', () => {
     assert.ok(rs.modelMatches('claude-opus-5-5', 'claude-opus-5-5'))
     assert.ok(rs.modelMatches('claude-haiku-4-5', 'claude-haiku-4-5-20251001'))

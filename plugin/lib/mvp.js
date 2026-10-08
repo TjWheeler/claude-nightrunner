@@ -1,4 +1,4 @@
-// The MVP (D-36; build plan, MVP): a run hands a note from one session to the
+// A run hands a note from one session to the
 // next. On "continue" the hooks clear the session and submit the note as the
 // next session's first prompt. Plain logic only; register.js does the I/O.
 
@@ -17,7 +17,7 @@ export const USER_FILE = '.claude/nightrunner.json'
 // The project's settings, committed with the repo (relative to its folder).
 export const PROJECT_FILE = '.claude/nightrunner.json'
 
-// Usage limits (Q-5, D-25): wait for the reset unless it is further than this.
+// Usage limits: wait for the reset unless it is further away than this.
 export const MAX_WAIT_HOURS = 6
 // No reset time reported: try again after this, within MAX_WAIT_HOURS overall.
 export const RETRY_WAIT_MS = 30 * 60 * 1000

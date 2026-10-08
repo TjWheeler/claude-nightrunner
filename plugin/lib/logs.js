@@ -1,4 +1,4 @@
-// Run logs and the summary (D-30; build plan decisions 5 and 14). `$.fs` can't
+// Run logs and the summary. `$.fs` can't
 // append, so each session's events and requests go in their own files, which
 // are rewritten as the session grows. No file ever holds a whole run, so a
 // rewrite from memory can never replace one.
@@ -55,7 +55,7 @@ export function fromJsonl(text) {
 }
 
 /**
- * Per-session rows for the summary (acceptance 13).
+ * Per-session rows for the summary.
  * @returns {{ session, startedAt, endedAt, minutes, outcome, reason, peakContext, commits, refusals }[]}
  */
 export function summariseSessions(events) {
@@ -117,7 +117,7 @@ export function formatSummary(run, events) {
 }
 
 /**
- * Run folders to remove at run start (decision 14): the oldest beyond `keep`,
+ * Run folders to remove at run start: the oldest beyond `keep`,
  * never the current run, and only well-formed run ids.
  */
 export function runsToPrune(ids, keep, currentId) {

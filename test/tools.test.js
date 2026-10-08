@@ -52,7 +52,7 @@ describe('commit input and message', () => {
     assert.equal(validateCommit({ subject: 'x'.repeat(101) }).ok, false)
     assert.match(validateCommit({ subject: 's', body: 'x\nNightrunner-Run: fake' }).error, /trailer/)
   })
-  test('message: subject, body, run trailer, configured trailers (decision 11)', () => {
+  test('message: subject, body, run trailer, configured trailers', () => {
     assert.equal(
       commitMessage({ subject: 'S', body: 'B' }, { runId: 'R', trailers: ['Co-Authored-By: C <c@x>'] }),
       'S\n\nB\n\nNightrunner-Run: R\nCo-Authored-By: C <c@x>\n',

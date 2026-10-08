@@ -1,6 +1,5 @@
-// The three session tools (D-18, D-20; build plan decision 8): their
-// definitions, input checks and result text. The host doesn't enforce a
-// declared schema (Phase 0, P0-5), so every input is checked here. Results
+// The three session tools: their definitions, input checks and result text.
+// The host doesn't enforce a declared schema, so every input is checked here. Results
 // are plain strings saying what happens next, or why a call was refused and
 // what to do instead.
 
@@ -119,7 +118,7 @@ function bad(error) {
   return { ok: false, error }
 }
 
-/** The commit message: subject, body, then the run trailer and any configured trailers (decision 11). */
+/** The commit message: subject, body, then the run trailer and any configured trailers. */
 export function commitMessage({ subject, body }, { runId, trailers = [] }) {
   const parts = [subject]
   if (body) parts.push(body)
@@ -161,7 +160,7 @@ export function truncate(text, max) {
   return s.length <= max ? s : s.slice(0, max) + `\n… (${s.length - max} more characters)`
 }
 
-/** The status tool's text (D-22, D-24). */
+/** The status tool's text: context against the soft and hard stops, and the session count. */
 export function statusText(run, { context } = {}) {
   if (!run || run.status === 'ended') return RESULTS.noRun
   const s = run.settings

@@ -1,5 +1,4 @@
-// The run state machine (build plan decisions 5–7, 10; D-12, D-18, D-21 –
-// D-23, D-26, Q-6, Q-7). Every function is pure: it takes the run record and
+// The run state machine. Every function is pure: it takes the run record and
 // returns a new one plus the action the hooks layer should take.
 
 export const SCHEMA_VERSION = 1
@@ -27,7 +26,7 @@ export const END_REASONS = {
 
 const iso = now => new Date(now).toISOString()
 
-/** `YYYYMMDD-HHMMSS-<4 hex>` in UTC (decision 5). */
+/** `YYYYMMDD-HHMMSS-<4 hex>` in UTC: sortable, and unique enough for one folder. */
 export function newRunId(now, hex4) {
   if (!/^[0-9a-f]{4}$/.test(hex4)) throw new Error('hex4 must be four lowercase hex digits')
   const s = iso(now)
@@ -130,13 +129,14 @@ export function reportedOutcome(reason) {
   return END_REASONS[reason]
 }
 
-/** Every outcome but the user's own stop is notified (D-29). */
+/** Every outcome but the user's own stop is notified. */
 export function shouldNotify(run) {
   return run.status === 'ended' && run.endReason !== 'stopped' && run.settings.notifications === 'push'
 }
 
 /**
- * Whether a session made progress (D-26).
+ * Whether a session made progress: new run commits when phase commits are on,
+ * otherwise a changed progress marker.
  * @param {{ phaseCommits: boolean, runCommits: number, marker?: string|null, lastMarker?: string|null }} p
  */
 export function progressMade({ phaseCommits, runCommits = 0, marker, lastMarker }) {
@@ -215,7 +215,8 @@ export function onContext(run, tokens) {
 }
 
 /**
- * A main-session turn ended. Drives the hard stop (D-22).
+ * A main-session turn ended. Drives the hard stop: abort, prompt, then end the
+ * run if the prompted turn ends with no handover.
  * @returns {{ run, action: 'clear' | 'hard-stop-prompt' | 'end' | 'idle', endReason?: string }}
  */
 export function onTurnComplete(run, { now }) {
@@ -232,7 +233,7 @@ export function onTurnComplete(run, { now }) {
 
 /**
  * The user asked to stop. With no turn running (or while waiting) the run ends
- * now; otherwise at the next handover (acceptance 11).
+ * now; otherwise at the next handover.
  */
 export function requestStop(run, { turnRunning, now }) {
   if (run.status === 'waiting' || run.status === 'suspended' || !turnRunning) {
@@ -245,7 +246,7 @@ export function enterWait(run, { until }) {
   return { ...run, status: 'waiting', waitUntil: until }
 }
 
-/** The wait is over: the same session carries on (no handover, so no clear: D-22). */
+/** The wait is over: the same session carries on (no handover, so no clear). */
 export function finishWait(run) {
   return { ...run, status: 'active', waitUntil: null, afterWait: true, session: { ...run.session, nudges: 0, hardStop: null } }
 }
@@ -255,7 +256,7 @@ export function suspend(run) {
 }
 
 /**
- * Carry on a suspended run in this process (D-21): a new session that starts
+ * Carry on a suspended run in this process, at the user's request: a new session that starts
  * from the last recorded handover.
  */
 export function resumeRun(run, { sessionId, head, now, pid }) {
@@ -264,7 +265,7 @@ export function resumeRun(run, { sessionId, head, now, pid }) {
   return heartbeat(next, { now, pid })
 }
 
-/** The answering model matches the pin (D-23). A date suffix or a [1m] tag is the same model. */
+/** The answering model matches the pin. A date suffix or a [1m] tag is the same model. */
 export function modelMatches(pinned, answered) {
   if (!answered) return true
   const strip = m => String(m).replace(/\[[^\]]*\]$/, '').toLowerCase()

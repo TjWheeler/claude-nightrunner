@@ -1,4 +1,4 @@
-// The run-scoped deny list (D-15, D-28; build plan decisions 4 and 13).
+// The run-scoped deny list.
 //
 // Entries are a program optionally followed by subcommand words
 // (`kubectl`, `gh pr`), or an MCP tool-name pattern (`mcp__<server>__<glob>`).

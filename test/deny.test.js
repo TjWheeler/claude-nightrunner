@@ -296,7 +296,7 @@ describe('MCP and other tool names', () => {
   })
 })
 
-describe('additions and removals (D-15)', () => {
+describe('additions and removals', () => {
   test('any layer adds entries', () => {
     const { list: l } = buildDenyList({ add: ['make deploy', 'psql'] })
     refused('make deploy', l)

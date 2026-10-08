@@ -1,4 +1,4 @@
-// Usage limits (Q-5, D-25; build plan decision 10). A usage-limit stop is a
+// Usage limits. A usage-limit stop is a
 // turn that ended in error (or a StopFailure with `rate_limit`) while a
 // rate-limit window reads 100% with a reset time. The run waits until the
 // latest such reset plus a margin, unless that is beyond the maximum wait.

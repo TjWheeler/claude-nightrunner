@@ -1,5 +1,4 @@
-// The prompts and notices nightrunner sends (build plan decisions 9, 10 and
-// 13; D-19, D-21, D-22, D-25, D-28, D-29).
+// The prompts and notices nightrunner sends.
 
 const label = run => (run.name ? `"${run.name}" (${run.id})` : run.id)
 
@@ -26,10 +25,10 @@ export function afterWaitPrompt(run) {
   return `[nightrunner] The usage limit has reset and run ${label(run)} carries on in this session. ${afterWaitLine} Call the status tool, then carry on where you stopped.`
 }
 
-/** Decision 10. */
+/** Sent when context passes the hard stop and the turn has been aborted. */
 export const HARD_STOP_PROMPT = '[nightrunner] Context is past the hard stop. Record your state in the repo and call handover now.'
 
-/** D-18, decision 10. */
+/** Sent after an idle period with no handover; a few in a row end the run. */
 export function nudgePrompt(run) {
   const left = 3 - run.session.nudges
   return `[nightrunner] This session has been idle with no handover. If the work is done or stuck, call the handover tool with the right outcome. ` +
@@ -37,12 +36,12 @@ export function nudgePrompt(run) {
     (left > 0 ? `${left} more idle period${left === 1 ? '' : 's'} without a handover and the run stops as an error.` : 'The next idle period without a handover stops the run as an error.')
 }
 
-/** Decision 13: the refusal a driver must treat as a blocker. */
+/** The refusal a driver must treat as a blocker. */
 export function denyMessage(what) {
   return `nightrunner: ${what} is owner-only during an autonomous run and was refused. Don't work round it. If the work needs it, call \`handover\` with \`blocked\`.`
 }
 
-/** Decision 7, D-21. */
+/** Shown when a run's process stopped; the user resumes or stops it, never nightrunner. */
 export function suspendedNotice(run) {
   return `nightrunner: run ${label(run)} was suspended (its Claude Code process stopped during session ${run.session.number}). ` +
     'Use /nightrunner resume to carry it on here, or /nightrunner stop to end it.'
@@ -72,7 +71,7 @@ export function endText(reason) {
 }
 
 /**
- * The push notification (Q-2, D-29): run, outcome and a one-line reason.
+ * The push notification: run, outcome and a one-line reason.
  * Never code, diffs or secrets: the reason is cut to one short line.
  */
 export function notificationText(run, reason) {

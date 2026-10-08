@@ -1,8 +1,9 @@
-// Run settings (D-14, D-17; build plan decision 3). Layers apply in order —
+// Run settings. Layers apply in order —
 // built-in defaults, the committed project file (.claude/nightrunner.json),
 // the user's plugin options, then run-start arguments — and the later wins.
 // List settings add up across layers instead. denyRemove is read only from
-// the user's options (D-15). The resolved values are fixed at run start.
+// the user's options, so a repo can't loosen the guard rails for everyone who
+// runs in it. The resolved values are fixed at run start.
 
 import { buildDenyList, parseEntry, splitList } from './deny.js'
 
@@ -65,7 +66,7 @@ export function resolveSettings({ project = null, user = null, run = null, conte
       }
       if (unset(raw) || (Array.isArray(raw) && !raw.length)) continue
       if (spec.userOnly && layer !== 'user') {
-        errors.push(`${key} can only be set in your own plugin options, not in ${layerName(layer)}: a repo or a run argument can't loosen the deny list (D-15)`)
+        errors.push(`${key} can only be set in your own plugin options, not in ${layerName(layer)}: a repo or a run argument can't loosen the deny list`)
         continue
       }
       const parsed = coerce(key, spec, raw)

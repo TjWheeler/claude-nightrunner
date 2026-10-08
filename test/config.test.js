@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveSettings, defaults, SETTINGS, describeSettings } from '../plugin/lib/config.js'
 
-test('a fresh install runs on the defaults with no setup (acceptance 14)', () => {
+test('a fresh install runs on the defaults with no setup', () => {
   const r = resolveSettings()
   assert.equal(r.ok, true, r.errors.join('; '))
   assert.deepEqual(r.settings, defaults())
@@ -20,7 +20,7 @@ test('a fresh install runs on the defaults with no setup (acceptance 14)', () =>
   assert.equal(r.sources.model, 'default')
 })
 
-test('later layers win for single values (D-17)', () => {
+test('later layers win for single values', () => {
   const r = resolveSettings({
     project: { softStopTokens: 150000, sessionLimit: 10, model: 'claude-sonnet-5-5' },
     user: { sessionLimit: '12', model: '' },
@@ -46,11 +46,11 @@ test('list settings add up across layers', () => {
   assert.equal(r.settings.commitTrailers.length, 2)
 })
 
-test('denyRemove is refused outside the user options (D-15)', () => {
+test('denyRemove is refused outside the user options', () => {
   for (const layer of ['project', 'run']) {
     const r = resolveSettings({ [layer]: { denyRemove: 'kubectl get' } })
     assert.equal(r.ok, false)
-    assert.match(r.errors[0], /denyRemove can only be set in your own plugin options.*D-15/)
+    assert.match(r.errors[0], /denyRemove can only be set in your own plugin options/)
   }
   const ok = resolveSettings({ user: { denyRemove: 'kubectl get' } })
   assert.ok(ok.ok, ok.errors.join('; '))
@@ -64,7 +64,7 @@ test('unknown keys refuse the run, naming the key', () => {
   assert.match(r.errors[0], /\.claude\/nightrunner\.json/)
 })
 
-test('invalid configurations are refused with a reason (acceptance 14)', () => {
+test('invalid configurations are refused with a reason', () => {
   const cases = [
     [{ run: { softStopTokens: 300000 } }, /softStopTokens \(300000\) must be below hardStopTokens \(300000\)/],
     [{ run: { softStopTokens: '400k' } }, /must be below hardStopTokens/],

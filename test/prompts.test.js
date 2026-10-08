@@ -11,13 +11,13 @@ const base = () => {
 }
 const handedOver = () => beginSession(applyHandover(base(), { outcome: 'continue', reason: 'r', note: 'Resume plan X from its Resume section.' }, { sessionId: 's1', runCommits: 1, now: T0 }).run, { sessionId: 's2', head: 'h', now: T0 })
 
-test('the handover prompt is the preamble then the note (decision 9)', () => {
+test('the handover prompt is the preamble then the note', () => {
   const p = handoverPrompt(handedOver())
   assert.match(p, /^\[nightrunner\] This is session 2 of at most 25 in run "demo" \(20261008-200000-abcd\)\./)
   assert.match(p, /context was cleared/)
   assert.match(p, /Call the nightrunner status tool first/)
   assert.ok(p.endsWith('Handover note from session 1:\n\nResume plan X from its Resume section.'))
-  assert.ok(!p.startsWith('/'), 'never a command (P0-2)')
+  assert.ok(!p.startsWith('/'), 'never a command')
   assert.doesNotMatch(p, /sub-agent work/)
 })
 

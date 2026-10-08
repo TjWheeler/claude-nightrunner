@@ -12,7 +12,7 @@ const run = () => {
 }
 const at = min => T0 + min * 60000
 
-test('paths (decision 5, D-30)', () => {
+test('paths', () => {
   assert.equal(logs.runFile(ID), '.nightrunner/runs/20261008-200000-abcd/run.json')
   assert.equal(logs.eventsFile(ID, 3), '.nightrunner/runs/20261008-200000-abcd/events-0003.jsonl')
   assert.equal(logs.requestsFile(ID, 12), '.nightrunner/runs/20261008-200000-abcd/requests-0012.jsonl')
@@ -31,7 +31,7 @@ test('records and JSONL round trip, skipping a torn line', () => {
   assert.equal(logs.toJsonl([]), '')
 })
 
-test('the summary has a row per session and collects review notes (acceptance 13)', () => {
+test('the summary has a row per session and collects review notes', () => {
   const ev = (type, session, min, data = {}) => logs.event(type, data, { now: at(min), session })
   const events = [
     ev('session.start', 1, 0), ev('context', 1, 10, { tokens: 180000 }), ev('commit', 1, 30, { sha: 'aaaaaaaa1' }),
@@ -54,7 +54,7 @@ test('the summary has a row per session and collects review notes (acceptance 13
   assert.match(md, /sub-agent ag1\) git push/)
 })
 
-test('pruning keeps the newest runs and never the current one (decision 14)', () => {
+test('pruning keeps the newest runs and never the current one', () => {
   const ids = ['20261001-000000-0001', '20261002-000000-0002', '20261003-000000-0003', 'junk', '20261004-000000-0004']
   assert.deepEqual(logs.runsToPrune(ids, 2, '20261004-000000-0004'), ['20261001-000000-0001', '20261002-000000-0002'])
   assert.deepEqual(logs.runsToPrune(ids, 20, '20261004-000000-0004'), [])

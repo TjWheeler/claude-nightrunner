@@ -1,4 +1,4 @@
-// A conservative POSIX-shell reader for the deny matcher (D-28). It doesn't
+// A conservative POSIX-shell reader for the deny matcher. It doesn't
 // run anything and doesn't expand anything. It splits a command line into
 // simple commands, removes quoting, decodes $'…' strings, and parses every
 // $(…), `…`, <(…) and >(…) it meets as commands in their own right. Words

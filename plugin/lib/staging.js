@@ -1,5 +1,4 @@
-// What the commit tool stages and what it refuses (D-27; build plan
-// decisions 11 and 12). Patterns use gitignore-style globs: a pattern with no
+// What the commit tool stages and what it refuses. Patterns use gitignore-style globs: a pattern with no
 // slash matches a name at any depth, a trailing slash matches a directory and
 // everything in it, `*` stays inside one path segment and `**` crosses them.
 // Matching ignores case, so a case-insensitive filesystem can't slip past.

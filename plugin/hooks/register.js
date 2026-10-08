@@ -1,4 +1,4 @@
-// The MVP wiring (D-36; build plan, MVP). /nightrunner start begins a run; the
+// The hooks. /nightrunner start begins a run; the
 // handover tool's "continue" clears the session once the turn ends and submits
 // the note as the next session's first prompt. When context passes the run's
 // budget, one prompt per session asks Claude to hand over. When a usage limit
@@ -128,7 +128,7 @@ export function register(on, opts) {
     if (!loaded) {
       loaded = true
       try { run = parseRun(await $.fs.read(RUN_FILE)) } catch { run = null }
-      // A wait whose process has gone has no timer here: never resume it on our own (D-21).
+      // A wait whose process has gone has no timer here: never resume it on our own; the user carries on.
       if (isWaiting(run)) { run = endWait(run); await save($) }
     }
     return next(e)
