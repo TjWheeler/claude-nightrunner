@@ -9,7 +9,7 @@
 
 import {
   RUNS_DIR, LEGACY_RUN_FILE, HEARTBEAT_MS, runFile, newRunId, claimRun, ownedByOther, migrateLegacyRun,
-  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
+  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, START_TOOL, startInput, validateStart, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
   handoverInput, validateHandover, newRun, parseRun, isActive, applyHandover,
   endRun, beginNextSession, statusText, parseStartArgs, resolveBudget,
   shouldNudge, nudgePrompt, formatTokens, configureInput, validateConfigure, setRunBudget,
@@ -20,6 +20,7 @@ import {
 const HANDOVER = 'mcp__nightrunner__handover'
 const STATUS = 'mcp__nightrunner__status'
 const CONFIGURE = 'mcp__nightrunner__configure'
+const START = 'mcp__nightrunner__start'
 const HELP = '/nightrunner start [name] [budget=150k] [wait=on|off] | stop | status | resume [name|id]'
 
 // Which tab owns a run: a token for this process, kept in the run's file.
@@ -196,6 +197,23 @@ async function saveDefaultBudget($, value) {
   return null
 }
 
+// Start a run in this tab, for /nightrunner start and the start tool.
+// Returns what to tell the caller, and whether a run started.
+async function startRun($, args) {
+  if (isActive(run)) return { started: false, text: `This tab already has a run. ${statusText(run)}` }
+  const resolved = resolveBudget({ arg: args.budget, ...(await budgetDefaults($)) })
+  if (resolved.error) return { started: false, text: `Run not started: ${resolved.error}` }
+  const wait = resolveUsageWait({ arg: args.usageWait, project: (await readProjectFile($)).usageWait })
+  if (wait.error) return { started: false, text: `Run not started: ${wait.error}` }
+  const now = Date.now()
+  run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, now })
+  clearPending = startPending = false
+  await $.fs.write(GITIGNORE, GITIGNORE_TEXT)
+  await save($, { claim: true })
+  $.ui.invalidate('tool.describe')
+  return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
+}
+
 // The session's context as $.session.usage() reports it, or null.
 async function currentContext($) {
   try { return (await $.session.usage()).context ?? null } catch { return null }
@@ -223,6 +241,7 @@ export function register(on, opts) {
     await $.tool.register(HANDOVER_TOOL)
     await $.tool.register(STATUS_TOOL)
     await $.tool.register(CONFIGURE_TOOL)
+    await $.tool.register(START_TOOL)
     if (!loaded) {
       loaded = true
       // A resumed conversation (or a reloaded plugin) takes its run back; other
@@ -282,6 +301,18 @@ export function register(on, opts) {
       return { deny: `nightrunner: configure failed (${String(err)}). Tell the user.` }
     }
   }).catch(() => ({ deny: 'nightrunner: configure failed. Tell the user.' }))
+
+  on('tool.call', { tool: START }, async ($, e) => {
+    try {
+      if (e.agentId) return { deny: 'start is for the main session only.' }
+      const args = validateStart(startInput(e))
+      if (!args.ok) return { deny: `nightrunner: ${args.error}` }
+      const { started, text } = await startRun($, args)
+      return started ? { result: `${text} Work on what the user asked, and call the handover tool at a good stopping point.` } : { deny: `nightrunner: ${text}` }
+    } catch (err) {
+      return { deny: `nightrunner: the run didn't start (${String(err)}). Tell the user.` }
+    }
+  }).catch(() => ({ deny: "nightrunner: the run didn't start. Tell the user." }))
 
   on('tool.call', { tool: STATUS }, async ($) => {
     try {
@@ -357,17 +388,7 @@ export function register(on, opts) {
       if (isActive(run)) return { text: `This tab already has a run. ${statusText(run)}` }
       const args = parseStartArgs(rest)
       if (!args.ok) return { text: `Run not started: ${args.error}` }
-      const resolved = resolveBudget({ arg: args.budget, ...(await budgetDefaults($)) })
-      if (resolved.error) return { text: `Run not started: ${resolved.error}` }
-      const wait = resolveUsageWait({ arg: args.usageWait, project: (await readProjectFile($)).usageWait })
-      if (wait.error) return { text: `Run not started: ${wait.error}` }
-      const now = Date.now()
-      run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, now })
-      clearPending = startPending = false
-      await $.fs.write(GITIGNORE, GITIGNORE_TEXT)
-      await save($, { claim: true })
-      $.ui.invalidate('tool.describe')
-      return { text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
+      return { text: (await startRun($, args)).text }
     }
     if (sub === 'stop') {
       if (!isActive(run)) return { text: statusText(run) }

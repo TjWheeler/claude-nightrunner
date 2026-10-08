@@ -1,6 +1,6 @@
 {
   "name": "nightrunner",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Runs long work across fresh sessions: Claude hands over a note, nightrunner clears the context and the next session carries on from it.",
   "license": "MIT",
   "author": {

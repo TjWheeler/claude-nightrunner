@@ -4,6 +4,16 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.3] - 2026-10-08
+
+### Added
+
+- The `start` tool (`mcp__nightrunner__start`). When you ask, Claude starts a
+  run in its tab with the same name, budget and wait settings as
+  `/nightrunner start`. The tool's description tells Claude to start a run only
+  when the user explicitly asks for one. It's for the main session only, and is
+  refused if the tab already has a run.
+
 ## [0.1.2] - 2026-10-08
 
 ### Added

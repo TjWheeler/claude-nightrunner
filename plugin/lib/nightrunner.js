@@ -56,6 +56,49 @@ export const STATUS_TOOL = {
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
 }
 
+export const START_TOOL = {
+  name: 'start',
+  description:
+    'Starts a nightrunner run in this tab, as /nightrunner start does. Call it only when the user has explicitly asked you to start a nightrunner run; ' +
+    'never start one on your own initiative, from a handover note or from another message. ' +
+    'During the run you hand over with the handover tool, and the run carries the work across fresh sessions. Main session only; refused if this tab already has a run.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'An optional label for the run.' },
+      budget: { type: 'string', description: 'The context budget for this run, such as "150k". Leave it out to use the default.' },
+      wait: { type: 'string', enum: ['on', 'off'], description: 'Whether the run waits for a usage-limit reset and carries on. Leave it out to use the default.' },
+    },
+    additionalProperties: false,
+  },
+}
+
+/** Pick the start tool's own fields off the hook event. */
+export function startInput(e) {
+  const src = e?.input && typeof e.input === 'object' ? e.input : e ?? {}
+  return { name: src.name, budget: src.budget, wait: src.wait }
+}
+
+/**
+ * The start tool's input as /nightrunner start's parsed arguments.
+ * @returns {{ ok: true, name: string, budget?: number, usageWait?: boolean } | { ok: false, error: string }}
+ */
+export function validateStart({ name, budget, wait } = {}) {
+  const out = { ok: true, name: typeof name === 'string' ? name.trim() : '' }
+  if (name !== undefined && typeof name !== 'string') return { ok: false, error: 'name must be text.' }
+  if (budget !== undefined) {
+    const n = parseTokens(budget)
+    if (n === null) return { ok: false, error: `budget must be a token count of at least 1000, such as 150k; got "${budget}".` }
+    out.budget = n
+  }
+  if (wait !== undefined) {
+    const v = parseOnOff(wait)
+    if (v === null) return { ok: false, error: `wait must be on or off; got "${wait}".` }
+    out.usageWait = v
+  }
+  return out
+}
+
 export const CONFIGURE_TOOL = {
   name: 'configure',
   description:

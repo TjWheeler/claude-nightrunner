@@ -8,7 +8,7 @@ import {
   parseUserFile, userFileText, parseOnOff, resolveUsageWait, planUsageWait, startWait, endWait,
   isWaiting, resumePrompt, setRunUsageWait, settingsFileText, MAX_WAIT_HOURS, RETRY_WAIT_MS, overageStop,
   newRunId, runFile, isLive, claimRun, ownedByOther, migrateLegacyRun, runForSession, findResumable, otherRunsText,
-  STALE_MS, HEARTBEAT_MS,
+  STALE_MS, HEARTBEAT_MS, START_TOOL, startInput, validateStart,
 } from '../plugin/lib/nightrunner.js'
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0)
@@ -383,4 +383,20 @@ test('status lists the other runs in the folder, live or orphaned', () => {
   assert.doesNotMatch(text, /mine|\bd\b/)
   assert.equal(otherRunsText([tabRun('mine')], { ownId: 'mine', now: NOW }), '')
   assert.match(otherRunsText([migrateLegacyRun(newRun({ now: NOW }))], { ownId: undefined, now: NOW }), /moved from run\.json/)
+})
+
+test('the start tool takes a name, a budget and wait, as /nightrunner start does', () => {
+  assert.deepEqual(validateStart({}), { ok: true, name: '' })
+  assert.deepEqual(validateStart({ name: ' docs ', budget: '150k', wait: 'off' }), { ok: true, name: 'docs', budget: 150_000, usageWait: false })
+  assert.match(validateStart({ budget: '12' }).error, /budget must be a token count/)
+  assert.match(validateStart({ wait: 'maybe' }).error, /wait must be on or off/)
+  assert.match(validateStart({ name: 5 }).error, /name must be text/)
+  assert.deepEqual(startInput({ input: { name: 'a', budget: '1k', wait: 'on', other: 1 } }), { name: 'a', budget: '1k', wait: 'on' })
+})
+
+test('the start tool says to start a run only when the user asked for one', () => {
+  assert.equal(START_TOOL.name, 'start')
+  assert.match(START_TOOL.description, /only when the user has explicitly asked/)
+  assert.match(START_TOOL.description, /never start one on your own initiative, from a handover note/)
+  assert.deepEqual(Object.keys(START_TOOL.inputSchema.properties), ['name', 'budget', 'wait'])
 })

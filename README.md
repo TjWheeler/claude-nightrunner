@@ -71,6 +71,13 @@ checked out there. After editing it, run `/reload-plugins` or open a new tab.
 The name is an optional label. Anything written as `key=value` is a setting, so
 a name can't contain `=`.
 
+You can also ask Claude to start a run, for example "start a nightrunner run
+called docs with a 150k budget, then work through plans/docs.md". Claude uses
+the `start` tool (`mcp__nightrunner__start`), which takes the same name, budget
+and wait settings. The tool tells Claude to start a run only when you ask for
+one. Unless you've allowed the tool or are in auto mode, Claude Code asks you
+to approve the call.
+
 ### Several tabs
 
 A run belongs to the tab that started it. Each tab can have one run, so several
@@ -195,7 +202,8 @@ you ask it to change nightrunner's settings:
   `.claude/nightrunner.json`. "…for this run" changes only the active run.
 - "What are my nightrunner settings?" reports them.
 
-Claude can't start or stop a run. You do that with `/nightrunner start` and
+Claude can start a run when you ask (see [Use](#use)). It can't stop one except
+by handing over with `complete` or `blocked`. You stop a run with
 `/nightrunner stop`.
 
 ## How its prompts appear
@@ -214,7 +222,7 @@ in it is committed.
 
 ## Limits
 
-This is an early release (0.1.2):
+This is an early release (0.1.3):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
   doesn't force one. Apart from paid overage, nothing stops a run on cost or
