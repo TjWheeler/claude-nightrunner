@@ -4,7 +4,7 @@
 // budget, one prompt per session asks Claude to hand over. When a usage limit
 // stops a turn, the run waits for the reset and carries on (unless the run's
 // usageWait is off). With no run active, nothing here changes anything. The
-// logic is in ../lib/mvp.js.
+// logic is in ../lib/nightrunner.js.
 
 import {
   RUN_FILE, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
@@ -12,8 +12,8 @@ import {
   endRun, beginNextSession, statusText, parseStartArgs, resolveBudget,
   shouldNudge, nudgePrompt, formatTokens, configureInput, validateConfigure, setRunBudget,
   configText, parseUserFile, userFileText, settingsFileText, resolveUsageWait, setRunUsageWait,
-  classifyTurnEnd, planUsageWait, startWait, endWait, isWaiting, resumePrompt,
-} from '../lib/mvp.js'
+  classifyTurnEnd, planUsageWait, startWait, endWait, isWaiting, resumePrompt, overageStop,
+} from '../lib/nightrunner.js'
 
 const HANDOVER = 'mcp__nightrunner__handover'
 const STATUS = 'mcp__nightrunner__status'
@@ -53,10 +53,28 @@ async function readProjectFile($) {
   try { return parseUserFile(await $.fs.read(PROJECT_FILE)) } catch { return {} }
 }
 
+// Paid overage is in use: end the run, dropping any pending clear or wait.
+// True when the run ended.
+async function stopIfOverage($, turnEnd) {
+  try {
+    const rateLimits = (await $.session.usage()).rateLimits ?? []
+    const ended = overageStop(run, { ...turnEnd, rateLimits, now: Date.now() })
+    if (!ended) return false
+    run = ended
+    clearPending = startPending = false
+    if (waitTimer) { waitTimer.cancel(); waitTimer = null }
+    await save($)
+    $.ui.invalidate('tool.describe')
+    return true
+  } catch { return false }
+}
+
 // A usage limit stopped the turn: wait for the reset, or end the run.
 async function checkUsageLimit($, stopFailureError) {
   try {
-    if (!isActive(run) || isWaiting(run) || run.usageWait === false) return
+    if (!isActive(run) || isWaiting(run)) return
+    if (await stopIfOverage($, { reason: 'error', stopFailureError })) return
+    if (run.usageWait === false) return
     const rateLimits = (await $.session.usage()).rateLimits ?? []
     if (classifyTurnEnd({ reason: 'error', stopFailureError, rateLimits }) !== 'usage-limit') return
     if (waitTimer) waitTimer.cancel()
@@ -82,7 +100,7 @@ async function resumeAfterWait($) {
   if (!isWaiting(run)) return
   run = endWait(run)
   await save($)
-  void $.prompt.submit({ text: resumePrompt(), asUser: true }).catch(() => {})
+  void $.prompt.submit({ text: resumePrompt() }).catch(() => {})
 }
 
 // The default budget sources, read fresh: the saved file and the plugin option.
@@ -113,7 +131,7 @@ async function checkBudget($) {
     await save($)
     const text = nudgePrompt(run, tokens)
     $.clock.after(500, () => {
-      void $.prompt.submit({ text, asUser: true }).catch(() => {})
+      void $.prompt.submit({ text }).catch(() => {})
     })
   } catch {}
 }
@@ -204,6 +222,8 @@ export function register(on, opts) {
 
   // A hook can't run a command while it holds the turn, so the clear goes on a timer.
   on('turn.complete', async ($, e, next) => {
+    // Checked first: overage ends the run even when a handover is pending.
+    if (!e.agentId && isActive(run) && await stopIfOverage($, { reason: e.reason })) return next(e)
     if (!e.agentId && clearPending && isActive(run)) {
       clearPending = false
       startPending = true
@@ -235,7 +255,7 @@ export function register(on, opts) {
       const started = beginNextSession(run)
       run = started.run
       await save($)
-      void $.prompt.submit({ text: started.prompt, asUser: true }).catch(() => {})
+      void $.prompt.submit({ text: started.prompt }).catch(() => {})
     }
     return next(e)
   })

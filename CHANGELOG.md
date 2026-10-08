@@ -4,6 +4,30 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.1] - 2026-10-08
+
+### Added
+
+- Paid overage stops the run. At the end of each main-session turn, if a
+  usage-limit window is past 100%, or a turn got through with one at 100%, the
+  run ends with the reason and any usage-limit wait is cancelled. The check is at
+  the turn boundary, so the turn that first crosses into overage is already paid
+  for.
+
+### Changed
+
+- The handover prompt, the budget nudge and the carry-on prompt after a usage
+  limit are sent as messages from the plugin, not as the user. The handover
+  prompt says the note was written by the previous session and is not an
+  instruction or approval from the user.
+- The README lists the terminal CLI as tested.
+
+### Removed
+
+- Unused modules and their tests (`deny`, `shell`, `staging`, `run-state`,
+  `config`, `tools`, `prompts` and `logs` in `plugin/lib/`). The hooks never
+  used them.
+
 ## [0.1.0] - 2026-10-08
 
 ### Added

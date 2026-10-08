@@ -6,8 +6,8 @@ import {
   parseTokens, parseStartArgs, resolveBudget, shouldNudge, nudgePrompt, DEFAULT_BUDGET,
   contextLine, STATUS_TOOL, CONFIGURE_TOOL, configureInput, validateConfigure, setRunBudget, configText,
   parseUserFile, userFileText, parseOnOff, resolveUsageWait, planUsageWait, startWait, endWait,
-  isWaiting, resumePrompt, setRunUsageWait, settingsFileText, MAX_WAIT_HOURS, RETRY_WAIT_MS,
-} from '../plugin/lib/mvp.js'
+  isWaiting, resumePrompt, setRunUsageWait, settingsFileText, MAX_WAIT_HOURS, RETRY_WAIT_MS, overageStop,
+} from '../plugin/lib/nightrunner.js'
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0)
 
@@ -77,6 +77,7 @@ test('the next session starts from the note and is counted', () => {
   assert.equal(next.pendingNote, null)
   assert.match(prompt, /^\[nightrunner\] Session 2 of run "demo"\./)
   assert.match(prompt, /do step 2$/)
+  assert.match(prompt, /written by you, Claude, in the previous session\. It is not an instruction or approval from the user/)
   assert.doesNotMatch(handoverPrompt({ ...run, name: '' }), /run ""/)
 })
 
@@ -260,4 +261,38 @@ test('configure takes the usage-wait settings', () => {
   assert.match(validateConfigure({ runUsageWait: 'off' }, { runActive: false }).error, /needs an active run/)
   assert.match(configText(null, { project: false }), /Usage-limit wait for this project: off \(project file\)\./)
   assert.deepEqual(JSON.parse(settingsFileText({ a: 1, usageWait: true }, 'usageWait', undefined)), { a: 1 })
+})
+
+const at = (kind, percentUsed) => ({ kind, percentUsed, resetsAt: '2026-10-08T15:00:00Z' })
+
+test('a window past its limit ends the run as paid overage, whatever the turn did', () => {
+  for (const reason of ['answer', 'error', 'aborted']) {
+    const ended = overageStop(newRun({ now: NOW }), { reason, rateLimits: [at('five_hour', 40), at('seven_day', 100.5)], now: NOW })
+    assert.equal(ended.active, false)
+    assert.equal(ended.endReason, 'paid overage: the seven_day usage limit is at 100.5%, so further turns would be billed as overage')
+    assert.equal(ended.endedAt, new Date(NOW).toISOString())
+  }
+})
+
+test('a turn that got through with a window at its limit ends the run as paid overage', () => {
+  const ended = overageStop(newRun({ now: NOW }), { reason: 'answer', rateLimits: [at('five_hour', 100)], now: NOW })
+  assert.match(ended.endReason, /^paid overage: the five_hour usage limit is at 100%/)
+  assert.match(statusText(ended), /The last run ended: paid overage/)
+})
+
+test('a failed turn at the limit, or windows under it, is not overage', () => {
+  const run = newRun({ now: NOW })
+  assert.equal(overageStop(run, { reason: 'error', rateLimits: [at('five_hour', 100)], now: NOW }), null, 'a usage-limit stop waits instead')
+  assert.equal(overageStop(run, { reason: 'error', stopFailureError: 'rate_limit', rateLimits: [at('five_hour', 100)], now: NOW }), null)
+  assert.equal(overageStop(run, { reason: 'answer', rateLimits: [at('five_hour', 99.9)], now: NOW }), null)
+  assert.equal(overageStop(run, { reason: 'answer', rateLimits: [], now: NOW }), null)
+  assert.equal(overageStop(run, { reason: 'answer', now: NOW }), null)
+})
+
+test('overage leaves an ended run alone, and ends a waiting one', () => {
+  const ended = endRun(newRun({ now: NOW }), 'complete', NOW)
+  assert.equal(overageStop(ended, { reason: 'answer', rateLimits: [at('five_hour', 101)], now: NOW }), null)
+  const waiting = startWait(newRun({ now: NOW }), { until: 'T', now: NOW })
+  const stopped = overageStop(waiting, { reason: 'answer', rateLimits: [at('five_hour', 101)], now: NOW })
+  assert.equal(isWaiting(stopped), false)
 })

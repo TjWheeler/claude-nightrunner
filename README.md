@@ -18,8 +18,8 @@ the run waits for the limit to reset and then carries on.
 - Claude Code with mods support. It's tested on 2.1.292. Mods arrived in
   2.1.287, and versions in between are untested. On a version without mods the
   plugin doesn't load, and nothing happens.
-- Tested in the VS Code panel on Linux (WSL). The terminal CLI and macOS should
-  work but are untested. Native Windows is untested, and saving a default
+- Tested in the VS Code panel and the terminal CLI on Linux (WSL). macOS should
+  work but is untested. Native Windows is untested, and saving a default
   budget through Claude needs `HOME` set.
 
 ## Install
@@ -149,6 +149,14 @@ Waiting is on by default. To turn it off:
 
 With waiting off, a usage limit leaves the run idle until you carry on.
 
+### Paid overage
+
+nightrunner never carries a run into paid overage. At the end of each turn it
+checks the usage-limit windows. If one is past 100%, or a turn got through with
+one at 100%, overage is being billed, so the run stops (and any wait is
+cancelled). `/nightrunner status` shows why it stopped. The check happens at the
+turn boundary, so the turn that first crosses into overage is already paid for.
+
 ### Asking Claude to configure it
 
 Claude has a `configure` tool (`mcp__nightrunner__configure`) and uses it when
@@ -166,6 +174,13 @@ you ask it to change nightrunner's settings:
 Claude can't start or stop a run. You do that with `/nightrunner start` and
 `/nightrunner stop`.
 
+## How its prompts appear
+
+nightrunner's prompts (the handover note, the budget nudge and the carry-on
+after a usage limit) reach Claude as messages from the plugin, not from you.
+The handover prompt also says the note was written by Claude in the previous
+session, so Claude doesn't treat it as your instruction or approval.
+
 ## What it writes
 
 It writes `.nightrunner/run.json` in the project folder, holding the run state
@@ -175,10 +190,11 @@ in it is committed.
 
 ## Limits
 
-This is an early release (0.1.0):
+This is an early release (0.1.1):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
-  doesn't force one. Nothing stops a run on cost or session count. Watch a long
+  doesn't force one. Apart from paid overage, nothing stops a run on cost or
+  session count. Watch a long
   run, or tell Claude in the prompt when to stop.
 - The usage-limit wait has been unit-tested but hasn't yet seen a real limit.
 - There are no notifications yet. A run that stops on a far-off reset just
@@ -202,12 +218,11 @@ claude plugin validate .
 ```
 
 The plugin is in `plugin/`. The hooks module is `plugin/hooks/register.js`, and
-its logic is in `plugin/lib/mvp.js` and `plugin/lib/usage.js`. The other modules
-in `plugin/lib/` are the tested core for the planned guard rails. The hooks
-don't use them yet. The mods loader only lets `$` be passed to
-functions declared at the top level of the module, and `claude plugin validate`
-doesn't check this. Run a headless `claude -p "/nightrunner status" --debug` in
-a test folder to see load errors.
+its logic is in `plugin/lib/nightrunner.js` and `plugin/lib/usage.js`
+(usage-limit classification), each with tests in `test/`. The mods loader only
+lets `$` be passed to functions declared at the top level of the module, and
+`claude plugin validate` doesn't check this. Run a headless
+`claude -p "/nightrunner status" --debug` in a test folder to see load errors.
 
 ## License
 
