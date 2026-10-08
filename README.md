@@ -11,7 +11,8 @@ context.
 
 When the context passes the run's budget (200k by default), nightrunner asks
 Claude to write a restart prompt and hand over. If a usage limit stops Claude,
-the run waits for the limit to reset and then carries on.
+the run waits for the limit to reset and then carries on. A run stops after 25
+sessions unless you set a different limit.
 
 ## Requirements
 
@@ -62,7 +63,7 @@ checked out there. After editing it, run `/reload-plugins` or open a new tab.
 ## Use
 
 ```
-/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off]   start a run in this tab
+/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off] [sessions=25]   start a run in this tab
 /nightrunner status                       show the run, its settings, the context used and other runs in the folder
 /nightrunner stop                         stop this tab's run
 /nightrunner resume [name|id]             take over a run whose tab was closed
@@ -74,7 +75,7 @@ a name can't contain `=`.
 You can also ask Claude to start a run, for example "start a nightrunner run
 called docs with a 150k budget, then work through plans/docs.md". Claude uses
 the `start` tool (`mcp__nightrunner__start`), which takes the same name, budget,
-wait and notify settings. The tool tells Claude to start a run only when you ask
+wait, notify and sessions settings. The tool tells Claude to start a run only when you ask
 for one. Unless you've allowed the tool or are in auto mode, Claude Code asks
 you to approve the call.
 
@@ -151,6 +152,31 @@ Values are token counts of at least 1000, such as `150k` or `150000`. The run
 records which budget it used and where it came from, and `/nightrunner status`
 shows both.
 
+## Session limit
+
+A run uses at most 25 sessions by default. When a session at the limit calls
+`handover` with `continue`, nightrunner stops the run instead of starting
+another, and sends a [notification](#notifications). Claude is told the run has
+stopped, so it can tell you where the work stands. The handover prompt tells
+each session its number against the limit, for example "Session 3 of 25", and
+tells the last session that it's the last. `complete` and `blocked` work as
+usual in any session.
+
+The limit comes from the first of these that is set:
+
+1. **This run only:** `/nightrunner start sessions=40`, or ask Claude to change
+   the active run's limit ("let this run use 40 sessions"). A limit at or below
+   the current session stops the run at its next `continue`.
+2. **For a project:** put `"maxSessions": 40` in the project's
+   `.claude/nightrunner.json`, or ask Claude to ("set nightrunner's session
+   limit to 40 for this project"). Commit the file to share it.
+3. **For every project:** put `"maxSessions": 40` in `~/.claude/nightrunner.json`,
+   or ask Claude to ("set my default nightrunner session limit to 40").
+4. **The built-in default:** 25.
+
+The limit is a whole number of at least 1. `/nightrunner status` shows the
+session against the limit and where the limit came from.
+
 ## Usage limits
 
 If a turn fails because a usage limit is reached (the five-hour or weekly
@@ -202,6 +228,9 @@ you ask it to change nightrunner's settings:
   `.claude/nightrunner.json`. "…for this run" changes only the active run.
 - "Turn off nightrunner notifications" saves it as your default. "…for this
   project" or "…for this run" changes only that.
+- "Set my default nightrunner session limit to 40" saves it in
+  `~/.claude/nightrunner.json`. "…for this project" or "…for this run" changes
+  only that.
 - "What are my nightrunner settings?" reports them.
 
 Claude can start a run when you ask (see [Use](#use)). It can't stop one except
@@ -211,9 +240,9 @@ by handing over with `complete` or `blocked`. You stop a run with
 ## Notifications
 
 When a run ends without you stopping it, nightrunner sends one notification
-through Claude Code. That covers `complete`, `blocked`, paid overage, a
-usage-limit reset too far off, and a wait that ran out. The notification names
-the run and why it ended, for example:
+through Claude Code. That covers `complete`, `blocked`, the session limit, paid
+overage, a usage-limit reset too far off, and a wait that ran out. The
+notification names the run and why it ended, for example:
 
 ```
 nightrunner "docs": blocked: Which database should the migration target?
@@ -261,11 +290,12 @@ in it is committed.
 
 ## Limits
 
-This is an early release (0.1.4):
+This is an early release (0.1.5):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
-  doesn't force one. Apart from paid overage, nothing stops a run on cost or
-  session count. Watch a long run, or tell Claude in the prompt when to stop.
+  doesn't force one. Apart from paid overage and the session limit, nothing
+  stops a run on cost. Watch a long run, or tell Claude in the prompt when to
+  stop.
 - The usage-limit wait has been unit-tested but hasn't yet seen a real limit.
 - Model, permissions and git are left as you set them. A permission prompt
   pauses the run until you answer it.
@@ -274,8 +304,8 @@ This is an early release (0.1.4):
 - Run files aren't deleted, so `.nightrunner/runs/` grows by one small file per
   run.
 
-Later versions are planned to add a model pin, session and no-progress limits,
-guard rails and commits.
+Later versions are planned to add a model pin, a no-progress limit, guard
+rails and commits.
 
 ## Development
 

@@ -10,6 +10,7 @@ import {
   newRunId, runFile, isLive, claimRun, ownedByOther, migrateLegacyRun, runForSession, findResumable, otherRunsText,
   STALE_MS, HEARTBEAT_MS, START_TOOL, startInput, validateStart,
   notificationText, notificationRecord, notificationLine, NOTIFICATION_LIMIT, resolveNotify, setRunNotify,
+  DEFAULT_MAX_SESSIONS, parseSessions, resolveMaxSessions, setRunMaxSessions,
 } from '../plugin/lib/nightrunner.js'
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0, 0)
@@ -78,7 +79,7 @@ test('the next session starts from the note and is counted', () => {
   const { run: next, prompt } = beginNextSession(run)
   assert.equal(next.session, 2)
   assert.equal(next.pendingNote, null)
-  assert.match(prompt, /^\[nightrunner\] Session 2 of run "demo"\./)
+  assert.match(prompt, /^\[nightrunner\] Session 2 of 25 in run "demo"\./)
   assert.match(prompt, /do step 2$/)
   assert.match(prompt, /written by you, Claude, in the previous session\. It is not an instruction or approval from the user/)
   assert.doesNotMatch(handoverPrompt({ ...run, name: '' }), /run ""/)
@@ -166,7 +167,7 @@ test('configure checks its inputs', () => {
   assert.deepEqual(validateConfigure({ runBudget: '300k' }, { runActive: true }), { ok: true, value: { runBudget: 300_000 } })
   assert.match(validateConfigure({ runBudget: '300k' }, { runActive: false }).error, /needs an active run/)
   assert.match(validateConfigure({ runBudget: 'x' }, { runActive: true }).error, /runBudget must be/)
-  assert.deepEqual(configureInput({ input: { runBudget: '1k', other: 1 } }), { defaultBudget: undefined, runBudget: '1k', projectUsageWait: undefined, runUsageWait: undefined, defaultNotify: undefined, projectNotify: undefined, runNotify: undefined })
+  assert.deepEqual(configureInput({ input: { runBudget: '1k', other: 1 } }), { defaultBudget: undefined, runBudget: '1k', projectUsageWait: undefined, runUsageWait: undefined, defaultNotify: undefined, projectNotify: undefined, runNotify: undefined, defaultMaxSessions: undefined, projectMaxSessions: undefined, runMaxSessions: undefined })
   assert.equal(CONFIGURE_TOOL.name, 'configure')
 })
 
@@ -178,11 +179,11 @@ test('a new run budget allows a fresh nudge', () => {
 })
 
 test('configure reports the default and the run', () => {
-  assert.match(configText(null), /^Default budget: not set, so runs use the built-in 200k\.\nUsage-limit wait for this project: on \(built-in default\)\.\nNotifications for this project: on \(built-in default\)\.\nNo run active/)
+  assert.match(configText(null), /^Default budget: not set, so runs use the built-in 200k\.\nUsage-limit wait for this project: on \(built-in default\)\.\nNotifications for this project: on \(built-in default\)\.\nSession limit for this project: 25 \(built-in default\)\.\nNo run active/)
   assert.match(configText(null, { saved: '150000', option: '300k' }), /^Default budget: 150k \(saved default\)\./)
   assert.match(configText(null, { option: '300k' }), /^Default budget: 300k \(plugin option\)\./)
   assert.match(configText(null, { saved: 'lots' }), /isn't a token count/)
-  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This tab's run: budget 50k \(run\), usage-limit wait on \(default\), notifications on \(built-in default\)\./)
+  assert.match(configText(newRun({ budget: 50_000, budgetSource: 'run', now: NOW }), {}), /This tab's run: budget 50k \(run\), usage-limit wait on \(default\), notifications on \(built-in default\), session 1 of 25 \(built-in default\)\./)
 })
 
 test('on/off values', () => {
@@ -379,8 +380,8 @@ test('status lists the other runs in the folder, live or orphaned', () => {
   const runs = [tabRun('mine'), tabRun('b', { name: 'api' }), { ...tabRun('c', { beatAgo: STALE_MS + 1 }), session: 2 }, tabRun('d', { active: false })]
   const text = otherRunsText(runs, { ownId: 'mine', now: NOW })
   assert.match(text, /^Other runs in this folder:\n/)
-  assert.match(text, /- "api" \(b\): live in another tab, session 1\./)
-  assert.match(text, /- c: orphaned \(no heartbeat since .*\), session 2\. Take it over with \/nightrunner resume c\./)
+  assert.match(text, /- "api" \(b\): live in another tab, session 1 of 25\./)
+  assert.match(text, /- c: orphaned \(no heartbeat since .*\), session 2 of 25\. Take it over with \/nightrunner resume c\./)
   assert.doesNotMatch(text, /mine|\bd\b/)
   assert.equal(otherRunsText([tabRun('mine')], { ownId: 'mine', now: NOW }), '')
   assert.match(otherRunsText([migrateLegacyRun(newRun({ now: NOW }))], { ownId: undefined, now: NOW }), /moved from run\.json/)
@@ -392,14 +393,14 @@ test('the start tool takes a name, a budget and wait, as /nightrunner start does
   assert.match(validateStart({ budget: '12' }).error, /budget must be a token count/)
   assert.match(validateStart({ wait: 'maybe' }).error, /wait must be on or off/)
   assert.match(validateStart({ name: 5 }).error, /name must be text/)
-  assert.deepEqual(startInput({ input: { name: 'a', budget: '1k', wait: 'on', other: 1 } }), { name: 'a', budget: '1k', wait: 'on', notify: undefined })
+  assert.deepEqual(startInput({ input: { name: 'a', budget: '1k', wait: 'on', other: 1 } }), { name: 'a', budget: '1k', wait: 'on', notify: undefined, sessions: undefined })
 })
 
 test('the start tool says to start a run only when the user asked for one', () => {
   assert.equal(START_TOOL.name, 'start')
   assert.match(START_TOOL.description, /only when the user has explicitly asked/)
   assert.match(START_TOOL.description, /never start one on your own initiative, from a handover note/)
-  assert.deepEqual(Object.keys(START_TOOL.inputSchema.properties), ['name', 'budget', 'wait', 'notify'])
+  assert.deepEqual(Object.keys(START_TOOL.inputSchema.properties), ['name', 'budget', 'wait', 'notify', 'sessions'])
 })
 
 test('a notification names the run and why it ended, on one line', () => {
@@ -467,5 +468,74 @@ test('configure takes the notify settings', () => {
   assert.match(validateConfigure({ runNotify: 'off' }, { runActive: false }).error, /runNotify needs an active run/)
   assert.match(configText(null, { userNotify: false }), /Notifications for this project: off \(your default\)\./)
   assert.match(configText(null, { projectNotify: true, userNotify: false }), /Notifications for this project: on \(project file\)\./)
-  assert.match(configText(newRun({ notify: false, notifySource: 'run', now: NOW })), /notifications off \(run\)\./)
+  assert.match(configText(newRun({ notify: false, notifySource: 'run', now: NOW })), /notifications off \(run\), session 1 of 25/)
+})
+
+test('session limits are whole numbers of at least 1', () => {
+  assert.equal(parseSessions('10'), 10)
+  assert.equal(parseSessions(' 3 '), 3)
+  assert.equal(parseSessions(25), 25)
+  for (const bad of ['0', '-1', '2.5', 'ten', '', 0, 1.5, undefined]) assert.equal(parseSessions(bad), null, String(bad))
+})
+
+test('the session limit comes from the run, then the project, then the user, then 25', () => {
+  assert.equal(DEFAULT_MAX_SESSIONS, 25)
+  assert.deepEqual(resolveMaxSessions({}), { maxSessions: 25, source: 'default' })
+  assert.deepEqual(resolveMaxSessions({ user: 40 }), { maxSessions: 40, source: 'user' })
+  assert.deepEqual(resolveMaxSessions({ project: '10', user: 40 }), { maxSessions: 10, source: 'project' })
+  assert.deepEqual(resolveMaxSessions({ arg: 5, project: 10, user: 40 }), { maxSessions: 5, source: 'run' })
+  assert.match(resolveMaxSessions({ project: 'lots' }).error, /maxSessions in \.claude\/nightrunner\.json must be a whole number/)
+  assert.match(resolveMaxSessions({ user: 0 }).error, /maxSessions in ~\/\.claude\/nightrunner\.json/)
+})
+
+test('sessions= is a run setting, for the command and the start tool', () => {
+  assert.equal(parseStartArgs(['docs', 'sessions=10']).maxSessions, 10)
+  assert.match(parseStartArgs(['sessions=0']).error, /sessions must be a whole number/)
+  assert.match(parseStartArgs(['colour=red']).error, /sessions \(e\.g\. sessions=10\)/)
+  assert.deepEqual(validateStart({ sessions: '8' }), { ok: true, name: '', maxSessions: 8 })
+  assert.match(validateStart({ sessions: 'x' }).error, /sessions must be a whole number/)
+})
+
+test('continue at the session limit ends the run instead of clearing', () => {
+  const run = { ...newRun({ maxSessions: 3, now: NOW }), session: 3 }
+  const applied = applyHandover(run, { outcome: 'continue', note: 'next' }, { sessionId: 's3', now: NOW })
+  assert.equal(applied.clear, false)
+  assert.equal(isActive(applied.run), false)
+  assert.equal(applied.run.endReason, 'session limit: all 3 sessions used')
+  assert.equal(applied.run.pendingNote, null)
+  assert.match(applied.result, /used all 3 of its sessions/)
+  assert.match(notificationText(applied.run), /session limit: all 3 sessions used$/)
+  assert.equal(applyHandover({ ...run, session: 2 }, { outcome: 'continue', note: 'next' }, { sessionId: 's2', now: NOW }).clear, true)
+  assert.equal(applyHandover(run, { outcome: 'complete' }, { sessionId: 's3', now: NOW }).run.endReason, 'complete')
+})
+
+test('runs from before the setting stop at the built-in limit', () => {
+  const run = { ...newRun({ now: NOW }), maxSessions: undefined, maxSessionsSource: undefined, session: 25 }
+  assert.equal(applyHandover(run, { outcome: 'continue', note: 'n' }, { sessionId: 's', now: NOW }).clear, false)
+  assert.match(statusText({ ...run, session: 2 }), /session 2 of 25 \(built-in default\)/)
+})
+
+test('the handover prompt counts sessions against the limit and flags the last', () => {
+  const run = { ...newRun({ maxSessions: 4, now: NOW }), session: 2, pendingNote: 'n' }
+  assert.match(handoverPrompt(run), /Session 3 of 4 in this run\. The context/)
+  assert.match(handoverPrompt({ ...run, session: 3 }), /Session 4 of 4 in this run\. This is its last session/)
+})
+
+test('status, configure and other runs show the session limit', () => {
+  const run = newRun({ maxSessions: 10, maxSessionsSource: 'project', now: NOW })
+  assert.match(statusText(run), /session 1 of 10 \(project file\)/)
+  assert.match(statusText(setRunMaxSessions(run, 12)), /session 1 of 12 \(set by configure\)/)
+  assert.match(configText(null, { userMaxSessions: 40 }), /Session limit for this project: 40 \(your default\)\./)
+  assert.match(configText(null, {}), /Session limit for this project: 25 \(built-in default\)\./)
+  assert.match(configText(run), /session 1 of 10 \(project file\)/)
+  assert.match(otherRunsText([{ ...run, id: 'x', heartbeatAt: new Date(NOW).toISOString() }], { ownId: 'y', now: NOW }), /session 1 of 10\./)
+})
+
+test('configure takes the session limit settings', () => {
+  assert.deepEqual(validateConfigure({ defaultMaxSessions: '40' }, { runActive: false }), { ok: true, value: { defaultMaxSessions: 40 } })
+  assert.deepEqual(validateConfigure({ projectMaxSessions: 'default' }, { runActive: false }), { ok: true, value: { projectMaxSessions: 'default' } })
+  assert.match(validateConfigure({ projectMaxSessions: '0' }, { runActive: false }).error, /projectMaxSessions must be a whole number/)
+  assert.deepEqual(validateConfigure({ runMaxSessions: '30' }, { runActive: true }), { ok: true, value: { runMaxSessions: 30 } })
+  assert.match(validateConfigure({ runMaxSessions: '30' }, { runActive: false }).error, /runMaxSessions needs an active run/)
+  assert.match(validateConfigure({ runMaxSessions: 'default' }, { runActive: true }).error, /runMaxSessions must be a whole number/)
 })

@@ -15,6 +15,8 @@ export const GITIGNORE_TEXT = '*\n'
 export const OUTCOMES = ['continue', 'complete', 'blocked']
 export const NOTE_LIMIT = 8000
 export const DEFAULT_BUDGET = 200_000
+// A run stops when a session at this count hands over with "continue".
+export const DEFAULT_MAX_SESSIONS = 25
 // The user's saved settings, written by the configure tool: $HOME/USER_FILE.
 export const USER_FILE = '.claude/nightrunner.json'
 // The project's settings, committed with the repo (relative to its folder).
@@ -69,6 +71,7 @@ export const START_TOOL = {
       budget: { type: 'string', description: 'The context budget for this run, such as "150k". Leave it out to use the default.' },
       wait: { type: 'string', enum: ['on', 'off'], description: 'Whether the run waits for a usage-limit reset and carries on. Leave it out to use the default.' },
       notify: { type: 'string', enum: ['on', 'off'], description: 'Whether the user is notified when the run ends without them stopping it. Leave it out to use the default.' },
+      sessions: { type: 'string', description: 'The most sessions this run may use, such as "10". Leave it out to use the default.' },
     },
     additionalProperties: false,
   },
@@ -77,14 +80,14 @@ export const START_TOOL = {
 /** Pick the start tool's own fields off the hook event. */
 export function startInput(e) {
   const src = e?.input && typeof e.input === 'object' ? e.input : e ?? {}
-  return { name: src.name, budget: src.budget, wait: src.wait, notify: src.notify }
+  return { name: src.name, budget: src.budget, wait: src.wait, notify: src.notify, sessions: src.sessions }
 }
 
 /**
  * The start tool's input as /nightrunner start's parsed arguments.
- * @returns {{ ok: true, name: string, budget?: number, usageWait?: boolean, notify?: boolean } | { ok: false, error: string }}
+ * @returns {{ ok: true, name: string, budget?: number, usageWait?: boolean, notify?: boolean, maxSessions?: number } | { ok: false, error: string }}
  */
-export function validateStart({ name, budget, wait, notify } = {}) {
+export function validateStart({ name, budget, wait, notify, sessions } = {}) {
   const out = { ok: true, name: typeof name === 'string' ? name.trim() : '' }
   if (name !== undefined && typeof name !== 'string') return { ok: false, error: 'name must be text.' }
   if (budget !== undefined) {
@@ -102,6 +105,11 @@ export function validateStart({ name, budget, wait, notify } = {}) {
     if (v === null) return { ok: false, error: `notify must be on or off; got "${notify}".` }
     out.notify = v
   }
+  if (sessions !== undefined) {
+    const n = parseSessions(sessions)
+    if (n === null) return { ok: false, error: `sessions must be a whole number of at least 1, such as 10; got "${sessions}".` }
+    out.maxSessions = n
+  }
   return out
 }
 
@@ -115,6 +123,8 @@ export const CONFIGURE_TOOL = {
     'runUsageWait sets it for the active run. ' +
     'defaultNotify sets whether the user is notified when a run ends without them stopping it, for every project ("on", "off", or "default" to remove it; saved in ~/.claude/nightrunner.json). ' +
     'projectNotify sets it for this project (written to .claude/nightrunner.json), and runNotify for the active run. ' +
+    `defaultMaxSessions sets the most sessions a run may use, for every project ("10", or "default" to go back to the built-in ${DEFAULT_MAX_SESSIONS}; saved in ~/.claude/nightrunner.json). ` +
+    'projectMaxSessions sets it for this project (written to .claude/nightrunner.json), and runMaxSessions for the active run. ' +
     'Only change what the user asked for. Main session only.',
   inputSchema: {
     type: 'object',
@@ -126,6 +136,9 @@ export const CONFIGURE_TOOL = {
       defaultNotify: { type: 'string', enum: ['on', 'off', 'default'], description: 'Whether runs in every project notify the user when they end without the user stopping them. "default" removes the setting (on).' },
       projectNotify: { type: 'string', enum: ['on', 'off', 'default'], description: "Whether this project's runs notify the user when they end. \"default\" removes the project setting." },
       runNotify: { type: 'string', enum: ['on', 'off'], description: 'Whether the active run notifies the user when it ends. Needs an active run.' },
+      defaultMaxSessions: { type: 'string', description: `The most sessions a run may use, in every project, such as "10". "default" removes the setting (${DEFAULT_MAX_SESSIONS}).` },
+      projectMaxSessions: { type: 'string', description: "The most sessions this project's runs may use. \"default\" removes the project setting." },
+      runMaxSessions: { type: 'string', description: 'The most sessions the active run may use. Needs an active run.' },
     },
     additionalProperties: false,
   },
@@ -137,6 +150,7 @@ export function configureInput(e) {
   return {
     defaultBudget: src.defaultBudget, runBudget: src.runBudget, projectUsageWait: src.projectUsageWait, runUsageWait: src.runUsageWait,
     defaultNotify: src.defaultNotify, projectNotify: src.projectNotify, runNotify: src.runNotify,
+    defaultMaxSessions: src.defaultMaxSessions, projectMaxSessions: src.projectMaxSessions, runMaxSessions: src.runMaxSessions,
   }
 }
 
@@ -144,7 +158,7 @@ export function configureInput(e) {
  * @returns {{ ok: true, value: { defaultBudget?: string, runBudget?: number } } | { ok: false, error: string }}
  * defaultBudget comes back as the option's stored text: "" clears it.
  */
-export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, runUsageWait, defaultNotify, projectNotify, runNotify } = {}, { runActive }) {
+export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, runUsageWait, defaultNotify, projectNotify, runNotify, defaultMaxSessions, projectMaxSessions, runMaxSessions } = {}, { runActive }) {
   const value = {}
   if (defaultBudget !== undefined) {
     const text = String(defaultBudget).trim()
@@ -188,7 +202,24 @@ export function validateConfigure({ defaultBudget, runBudget, projectUsageWait, 
     if (!runActive) return { ok: false, error: 'runNotify needs an active run, and none is active. projectNotify or defaultNotify set it for future runs.' }
     value.runNotify = v
   }
+  for (const [key, given] of [['defaultMaxSessions', defaultMaxSessions], ['projectMaxSessions', projectMaxSessions]]) {
+    if (given === undefined) continue
+    if (/^default$/i.test(String(given).trim())) { value[key] = 'default'; continue }
+    const n = parseSessions(given)
+    if (n === null) return { ok: false, error: `${key} must be a whole number of at least 1, such as 10, or "default"; got "${given}".` }
+    value[key] = n
+  }
+  if (runMaxSessions !== undefined) {
+    const n = parseSessions(runMaxSessions)
+    if (n === null) return { ok: false, error: `runMaxSessions must be a whole number of at least 1, such as 10; got "${runMaxSessions}".` }
+    if (!runActive) return { ok: false, error: 'runMaxSessions needs an active run, and none is active. projectMaxSessions or defaultMaxSessions set it for future runs.' }
+    value.runMaxSessions = n
+  }
   return { ok: true, value }
+}
+
+export function setRunMaxSessions(run, maxSessions) {
+  return { ...run, maxSessions, maxSessionsSource: 'set by configure' }
 }
 
 export function setRunNotify(run, notify) {
@@ -207,7 +238,7 @@ export function setRunBudget(run, budget) {
 }
 
 /** What the configure tool reports: the default runs start with, and the active run's budget. */
-export function configText(run, { saved, option, project, projectNotify, userNotify } = {}) {
+export function configText(run, { saved, option, project, projectNotify, userNotify, projectMaxSessions, userMaxSessions } = {}) {
   const resolved = resolveBudget({ saved, option })
   const def = resolved.error
     ? `Default budget: ${resolved.error}`
@@ -219,11 +250,13 @@ export function configText(run, { saved, option, project, projectNotify, userNot
     ? `Usage-limit wait: ${w.error}`
     : `Usage-limit wait for this project: ${onOff(w.usageWait)} (${w.source === 'project' ? 'project file' : 'built-in default'}).`
   const n = resolveNotify({ project: projectNotify, user: userNotify })
-  const notify = n.error ? `Notifications: ${n.error}` : `Notifications for this project: ${onOff(n.notify)} (${NOTIFY_SOURCES[n.source]}).`
+  const notify = n.error ? `Notifications: ${n.error}` : `Notifications for this project: ${onOff(n.notify)} (${SOURCES[n.source]}).`
+  const m = resolveMaxSessions({ project: projectMaxSessions, user: userMaxSessions })
+  const sessions = m.error ? `Session limit: ${m.error}` : `Session limit for this project: ${m.maxSessions} (${SOURCES[m.source]}).`
   const current = isActive(run)
-    ? `This tab's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}), notifications ${onOff(run.notify ?? true)} (${NOTIFY_SOURCES[run.notifySource] ?? run.notifySource ?? 'built-in default'}).`
+    ? `This tab's run: budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}), usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}), notifications ${onOff(run.notify ?? true)} (${sourceName(run.notifySource)}), session ${run.session} of ${maxSessionsOf(run)} (${sourceName(run.maxSessionsSource)}).`
     : 'No run active in this tab.'
-  return `${def}\n${wait}\n${notify}\n${current}\nA run started with /nightrunner start budget=… wait=on|off notify=on|off uses those instead.`
+  return `${def}\n${wait}\n${notify}\n${sessions}\n${current}\nA run started with /nightrunner start budget=… wait=on|off notify=on|off sessions=… uses those instead.`
 }
 
 /** The host passes the tool's fields on the event, beside its own. */
@@ -270,7 +303,13 @@ export function parseStartArgs(words) {
       out[key === 'wait' ? 'usageWait' : 'notify'] = v
       continue
     }
-    if (key !== 'budget') return { ok: false, error: `unknown setting "${key}". The run settings are budget (e.g. budget=150k), wait (wait=on or wait=off) and notify (notify=on or notify=off).` }
+    if (key === 'sessions') {
+      const n = parseSessions(value)
+      if (n === null) return { ok: false, error: `sessions must be a whole number of at least 1, such as 10; got "${value}".` }
+      out.maxSessions = n
+      continue
+    }
+    if (key !== 'budget') return { ok: false, error: `unknown setting "${key}". The run settings are budget (e.g. budget=150k), wait (wait=on or wait=off), notify (notify=on or notify=off) and sessions (e.g. sessions=10).` }
     const budget = parseTokens(value)
     if (budget === null) return { ok: false, error: `budget must be a token count of at least 1000, such as 150k or 150000; got "${value}".` }
     out.budget = budget
@@ -301,6 +340,15 @@ export function resolveBudget({ arg, saved, option }) {
   return { budget: DEFAULT_BUDGET, source: 'default' }
 }
 
+/** A session limit: a whole number of at least 1, as a number or text; null if it isn't one. */
+export function parseSessions(value) {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 1 ? value : null
+  const m = /^\s*(\d+)\s*$/.exec(String(value ?? ''))
+  if (!m) return null
+  const n = Number(m[1])
+  return n >= 1 ? n : null
+}
+
 /** "on"/"off" (or true/false, yes/no) to a boolean; null if it isn't one. */
 export function parseOnOff(value) {
   if (typeof value === 'boolean') return value
@@ -325,7 +373,9 @@ export function resolveUsageWait({ arg, project }) {
   return { usageWait: true, source: 'default' }
 }
 
-const NOTIFY_SOURCES = { run: 'run', project: 'project file', user: 'your default', default: 'built-in default' }
+// Where a run's notify or session limit came from, as status shows it.
+const SOURCES = { run: 'run', project: 'project file', user: 'your default', default: 'built-in default' }
+const sourceName = s => SOURCES[s] ?? s ?? 'built-in default'
 
 /**
  * Whether a run notifies the user when it ends: the run argument, then the
@@ -342,6 +392,25 @@ export function resolveNotify({ arg, project, user }) {
   }
   return { notify: true, source: 'default' }
 }
+
+/**
+ * The most sessions a run may use: the run argument, then the project file,
+ * then the user file, then DEFAULT_MAX_SESSIONS.
+ * @returns {{ maxSessions: number, source: 'run' | 'project' | 'user' | 'default' } | { error: string }}
+ */
+export function resolveMaxSessions({ arg, project, user }) {
+  if (arg !== undefined) return { maxSessions: arg, source: 'run' }
+  for (const [source, value, file] of [['project', project, PROJECT_FILE], ['user', user, `~/${USER_FILE}`]]) {
+    if (value === undefined || value === null) continue
+    const n = parseSessions(value)
+    if (n === null) return { error: `maxSessions in ${file} must be a whole number of at least 1; got ${JSON.stringify(value)}.` }
+    return { maxSessions: n, source }
+  }
+  return { maxSessions: DEFAULT_MAX_SESSIONS, source: 'default' }
+}
+
+// Runs from before the setting have the built-in limit.
+const maxSessionsOf = run => run.maxSessions ?? DEFAULT_MAX_SESSIONS
 
 /** The user file's settings; anything unreadable counts as none. */
 export function parseUserFile(text) {
@@ -366,9 +435,9 @@ export function settingsFileText(current, key, value) {
   return JSON.stringify(next, null, 2) + '\n'
 }
 
-export function newRun({ id = null, owner = null, sessionId = null, name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', notify = true, notifySource = 'default', now }) {
+export function newRun({ id = null, owner = null, sessionId = null, name = '', budget = DEFAULT_BUDGET, budgetSource = 'default', usageWait = true, usageWaitSource = 'default', notify = true, notifySource = 'default', maxSessions = DEFAULT_MAX_SESSIONS, maxSessionsSource = 'default', now }) {
   return {
-    version: 1, id, owner, sessionId, heartbeatAt: new Date(now).toISOString(), active: true, name, budget, budgetSource, usageWait, usageWaitSource, notify, notifySource,
+    version: 1, id, owner, sessionId, heartbeatAt: new Date(now).toISOString(), active: true, name, budget, budgetSource, usageWait, usageWaitSource, notify, notifySource, maxSessions, maxSessionsSource,
     startedAt: new Date(now).toISOString(), session: 1, handedOverIn: null, nudgedIn: null, pendingNote: null,
     waitUntil: null, waitingSince: null, endedAt: null, endReason: null,
   }
@@ -441,8 +510,8 @@ export function otherRunsText(runs, { ownId, now }) {
   const others = runs.filter(r => isActive(r) && r.id !== ownId)
   if (!others.length) return ''
   const lines = others.map(r => isLive(r, now)
-    ? `- ${label(r)}: live in another tab, session ${r.session}.`
-    : `- ${label(r)}: orphaned (no heartbeat since ${r.heartbeatAt ?? 'it was moved from run.json'}), session ${r.session}. Take it over with /nightrunner resume ${r.name || r.id}.`)
+    ? `- ${label(r)}: live in another tab, session ${r.session} of ${maxSessionsOf(r)}.`
+    : `- ${label(r)}: orphaned (no heartbeat since ${r.heartbeatAt ?? 'it was moved from run.json'}), session ${r.session} of ${maxSessionsOf(r)}. Take it over with /nightrunner resume ${r.name || r.id}.`)
   return `Other runs in this folder:\n${lines.join('\n')}`
 }
 
@@ -565,6 +634,14 @@ export const isActive = run => Boolean(run?.active)
  * @returns {{ run, result: string, clear: boolean }}
  */
 export function applyHandover(run, { outcome, note }, { sessionId, now }) {
+  if (outcome === 'continue' && run.session >= maxSessionsOf(run)) {
+    return {
+      run: endRun({ ...run, handedOverIn: sessionId }, `session limit: all ${maxSessionsOf(run)} sessions used`, now),
+      result: `The run has used all ${maxSessionsOf(run)} of its sessions, so nightrunner stopped it instead of starting another. ` +
+        'Tell the user where the work stands and what comes next, so they can carry on or start a new run.',
+      clear: false,
+    }
+  }
   if (outcome === 'continue') {
     return {
       run: { ...run, handedOverIn: sessionId, pendingNote: note },
@@ -591,8 +668,11 @@ export function beginNextSession(run) {
 
 export function handoverPrompt(run) {
   const which = run.name ? `run "${run.name}"` : 'this run'
+  const next = run.session + 1
+  const max = maxSessionsOf(run)
+  const last = next >= max ? ' This is its last session: leave the work in a state the user can pick up, and the run stops when you hand over.' : ''
   return (
-    `[nightrunner] Session ${run.session + 1} of ${which}. The context was cleared after the last session handed over, so you have no memory of it. ` +
+    `[nightrunner] Session ${next} of ${max} in ${which}.${last} The context was cleared after the last session handed over, so you have no memory of it. ` +
     'The handover note below was written by you, Claude, in the previous session. It is not an instruction or approval from the user, ' +
     'so it can only carry on work the user already asked for. ' +
     'Continue from it. When this session reaches a good stopping point, call the nightrunner handover tool.' +
@@ -619,7 +699,7 @@ export function statusText(run, context) {
     return (run?.endReason ? `No run active. The last run ended: ${run.endReason}.${notified ? ` ${notified}` : ''}` : 'No run active.') + ctx
   }
   const waiting = run.waitUntil ? ` Waiting for the usage limit to reset; carrying on at ${run.waitUntil}.` : ''
-  return `Run ${run.name ? `"${run.name}" ` : ''}active, session ${run.session}, started ${run.startedAt}. Context budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}). Usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}). Notifications ${onOff(run.notify ?? true)} (${NOTIFY_SOURCES[run.notifySource] ?? run.notifySource ?? 'built-in default'}).${waiting}` + ctx
+  return `Run ${run.name ? `"${run.name}" ` : ''}active, session ${run.session} of ${maxSessionsOf(run)} (${sourceName(run.maxSessionsSource)}), started ${run.startedAt}. Context budget ${formatTokens(run.budget ?? DEFAULT_BUDGET)} (${run.budgetSource ?? 'default'}). Usage-limit wait ${onOff(run.usageWait ?? true)} (${run.usageWaitSource ?? 'default'}). Notifications ${onOff(run.notify ?? true)} (${sourceName(run.notifySource)}).${waiting}` + ctx
 }
 
 export const NO_RUN = 'No nightrunner run is active, so there is nothing to hand over. Start one with /nightrunner start.'

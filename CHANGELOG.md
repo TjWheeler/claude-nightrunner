@@ -4,6 +4,23 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.5] - 2026-10-09
+
+### Added
+
+- A session limit. A run uses at most 25 sessions by default; when a session at
+  the limit hands over with `continue`, the run stops and notifies instead of
+  starting another. Set it per run (`sessions=` on `/nightrunner start`, or the
+  `start` tool), per project (`"maxSessions"` in `.claude/nightrunner.json`) or
+  for every project (`"maxSessions"` in `~/.claude/nightrunner.json`). The
+  `configure` tool sets all three.
+
+### Changed
+
+- The handover prompt gives the session number against the limit, and tells
+  the last session that it's the last. `/nightrunner status` shows the limit and
+  where it came from.
+
 ## [0.1.4] - 2026-10-08
 
 ### Added

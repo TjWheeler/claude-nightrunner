@@ -9,7 +9,7 @@
 
 import {
   RUNS_DIR, LEGACY_RUN_FILE, HEARTBEAT_MS, runFile, newRunId, claimRun, ownedByOther, migrateLegacyRun,
-  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, START_TOOL, startInput, validateStart, notificationText, notificationRecord, resolveNotify, setRunNotify, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
+  runForSession, findResumable, otherRunsText, GITIGNORE, GITIGNORE_TEXT, HANDOVER_TOOL, STATUS_TOOL, CONFIGURE_TOOL, START_TOOL, startInput, validateStart, notificationText, notificationRecord, resolveNotify, setRunNotify, resolveMaxSessions, setRunMaxSessions, NO_RUN, SUBAGENT, ALREADY, USER_FILE, PROJECT_FILE,
   handoverInput, validateHandover, newRun, parseRun, isActive, applyHandover,
   endRun, beginNextSession, statusText, parseStartArgs, resolveBudget,
   shouldNudge, nudgePrompt, formatTokens, configureInput, validateConfigure, setRunBudget,
@@ -21,7 +21,7 @@ const HANDOVER = 'mcp__nightrunner__handover'
 const STATUS = 'mcp__nightrunner__status'
 const CONFIGURE = 'mcp__nightrunner__configure'
 const START = 'mcp__nightrunner__start'
-const HELP = '/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off] | stop | status | resume [name|id]'
+const HELP = '/nightrunner start [name] [budget=150k] [wait=on|off] [notify=on|off] [sessions=25] | stop | status | resume [name|id]'
 
 // Which tab owns a run: a token for this process, kept in the run's file.
 const owner = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
@@ -232,13 +232,15 @@ async function startRun($, args) {
   if (wait.error) return { started: false, text: `Run not started: ${wait.error}` }
   const notify = resolveNotify({ arg: args.notify, project: (await readProjectFile($)).notify, user: (await readUserFile($)).notify })
   if (notify.error) return { started: false, text: `Run not started: ${notify.error}` }
+  const sessions = resolveMaxSessions({ arg: args.maxSessions, project: (await readProjectFile($)).maxSessions, user: (await readUserFile($)).maxSessions })
+  if (sessions.error) return { started: false, text: `Run not started: ${sessions.error}` }
   const now = Date.now()
-  run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, notify: notify.notify, notifySource: notify.source, now })
+  run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, notify: notify.notify, notifySource: notify.source, maxSessions: sessions.maxSessions, maxSessionsSource: sessions.source, now })
   clearPending = startPending = false
   await $.fs.write(GITIGNORE, GITIGNORE_TEXT)
   await save($, { claim: true })
   $.ui.invalidate('tool.describe')
-  return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}), notifications ${run.notify ? 'on' : 'off'} (${run.notifySource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
+  return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}), notifications ${run.notify ? 'on' : 'off'} (${run.notifySource}), at most ${run.maxSessions} sessions (${run.maxSessionsSource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
 }
 
 // The session's context as $.session.usage() reports it, or null.
@@ -335,12 +337,31 @@ export function register(on, opts) {
         await save($)
         done.push(`This run's notifications are now ${checked.value.runNotify ? 'on' : 'off'}.`)
       }
+      if (checked.value.defaultMaxSessions !== undefined) {
+        const v = checked.value.defaultMaxSessions
+        const path = await userFilePath($)
+        if (!path) return { deny: "nightrunner: the default wasn't saved: HOME is not set, so there is nowhere to save it." }
+        await $.fs.write(path, settingsFileText(await readUserFile($), 'maxSessions', v === 'default' ? undefined : v))
+        done.push(v === 'default' ? 'Removed your session limit default, so runs use the built-in limit.' : `Your runs now use at most ${v} sessions by default, in every project.`)
+      }
+      if (checked.value.projectMaxSessions !== undefined) {
+        const v = checked.value.projectMaxSessions
+        await $.fs.write(PROJECT_FILE, settingsFileText(await readProjectFile($), 'maxSessions', v === 'default' ? undefined : v))
+        done.push(v === 'default' ? `Removed maxSessions from ${PROJECT_FILE}.` : `Set maxSessions to ${v} in ${PROJECT_FILE}. Commit it to share it with the project.`)
+      }
+      if (checked.value.runMaxSessions !== undefined) {
+        run = setRunMaxSessions(run, checked.value.runMaxSessions)
+        await save($)
+        done.push(`This run may now use ${run.maxSessions} sessions; it is in session ${run.session}.`)
+      }
       if (checked.value.runBudget !== undefined) {
         run = setRunBudget(run, checked.value.runBudget)
         await save($)
         done.push(`This run's budget is now ${formatTokens(run.budget)}.`)
       }
-      return { result: [...done, configText(run, { ...(await budgetDefaults($)), project: (await readProjectFile($)).usageWait, projectNotify: (await readProjectFile($)).notify, userNotify: (await readUserFile($)).notify })].join('\n') }
+      const project = await readProjectFile($)
+      const user = await readUserFile($)
+      return { result: [...done, configText(run, { ...(await budgetDefaults($)), project: project.usageWait, projectNotify: project.notify, userNotify: user.notify, projectMaxSessions: project.maxSessions, userMaxSessions: user.maxSessions })].join('\n') }
     } catch (err) {
       return { deny: `nightrunner: configure failed (${String(err)}). Tell the user.` }
     }
