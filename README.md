@@ -1,2 +1,214 @@
-# claude-nightrunner
-Claude Code plugin for unattended, long-running work. When the context fills, it clears it and continues in a fresh session automatically: same VS Code tab, pinned model, run-scoped guardrails, phase commits on a branch and usage-limit waits. It stops and notifies you when a decision needs you.
+# nightrunner
+
+A Claude Code plugin that runs long work across fresh sessions, with no restart
+prompt pasted in between.
+
+You start a run. When a session reaches a good stopping point, Claude calls the
+`handover` tool with a note covering what it was doing, what's done and what
+comes next. nightrunner clears the context and sends that note as the first
+prompt of a fresh session in the same tab, so the work carries on with a clean
+context.
+
+When the context passes the run's budget (200k by default), nightrunner asks
+Claude to write a restart prompt and hand over. If a usage limit stops Claude,
+the run waits for the limit to reset and then carries on.
+
+## Requirements
+
+- Claude Code with mods support. It's tested on 2.1.292. Mods arrived in
+  2.1.287, and versions in between are untested. On a version without mods the
+  plugin doesn't load, and nothing happens.
+- Tested in the VS Code panel on Linux (WSL). The terminal CLI and macOS should
+  work but are untested. Native Windows is untested, and saving a default
+  budget through Claude needs `HOME` set.
+
+## Install
+
+Install it once at user scope, and it's available in every project. It does
+nothing until you start a run in a folder.
+
+At a Claude Code prompt:
+
+```
+/plugin install nightrunner --marketplace TjWheeler/claude-nightrunner
+```
+
+Answer `y` to add the marketplace, then choose **user** scope.
+
+Or from a terminal:
+
+```sh
+claude plugin marketplace add TjWheeler/claude-nightrunner
+claude plugin install nightrunner@nightrunner
+```
+
+After installing, open a new Claude tab, or reload the VS Code window, so the
+plugin loads.
+
+- **Update:** run `claude plugin marketplace update nightrunner`, then
+  `claude plugin update nightrunner@nightrunner`, then restart Claude Code.
+- **Remove:** run `claude plugin uninstall nightrunner@nightrunner`.
+
+### From a local clone
+
+```sh
+claude plugin marketplace add /path/to/claude-nightrunner
+claude plugin install nightrunner@nightrunner
+```
+
+The plugin is read from the clone in place, so every project runs whatever is
+checked out there. After editing it, run `/reload-plugins` or open a new tab.
+
+## Use
+
+```
+/nightrunner start [name] [budget=150k] [wait=on|off]   start a run in this folder
+/nightrunner status                                    show the run, its settings and the context used
+/nightrunner stop                                      stop the run
+```
+
+The name is an optional label. Anything written as `key=value` is a setting, so
+a name can't contain `=`.
+
+Then give Claude the work, and say how to hand over. For example:
+
+> Work through the plan in plans/feature.md. When you finish a phase, or
+> nightrunner says the context is past its budget, record your progress in the
+> plan and call the nightrunner handover tool with "continue" and a restart
+> prompt saying where to resume. If you need a decision from me, ask it and
+> call handover with "blocked". When the plan is done, call it with "complete".
+
+`handover` takes one of these outcomes:
+
+| Outcome | What happens |
+|---|---|
+| `continue` (needs a `note`) | Once the turn ends, the context is cleared and a new session starts with the note. |
+| `complete` | The run stops. |
+| `blocked` | The run stops, so you can answer Claude's question. Start a new run to carry on. |
+
+Only the main session can hand over, and only once per session. Sub-agents are
+refused.
+
+Claude can also call the `status` tool (`mcp__nightrunner__status`) to see the
+session's context against the budget, for example "Context: 85k of the 200k
+budget (43%)". It can use that to decide whether to start more work or hand over.
+Outside a run, `status` still reports the context size.
+
+## Context budget
+
+At the end of each turn, nightrunner checks the session's context size. The
+first time in a session that it reaches the budget, nightrunner sends one prompt
+asking Claude to finish or park its work, record progress, write a restart
+prompt and call `handover` with `continue`. Claude chooses the stopping point
+and writes the prompt. nightrunner sends that prompt once per session.
+
+The budget comes from the first of these that is set:
+
+1. **This run only:** `/nightrunner start budget=300k`, or ask Claude to change
+   the active run's budget (see below).
+2. **Your saved default, for every project:** ask Claude, for example "set my
+   nightrunner default budget to 150k". It's saved in `~/.claude/nightrunner.json`
+   and used by the next `/nightrunner start`, with no restart needed.
+3. **The plugin's `contextBudget` option:** set it in `/plugin` (open nightrunner
+   and choose configure), or from a terminal:
+   ```sh
+   echo '{"contextBudget":"150k"}' | claude plugin configure nightrunner@nightrunner --values-stdin
+   ```
+   Restart Claude Code, or open a new tab, after changing it.
+4. **The built-in default:** 200k.
+
+Values are token counts of at least 1000, such as `150k` or `150000`. The run
+records which budget it used and where it came from, and `/nightrunner status`
+shows both.
+
+## Usage limits
+
+If a turn fails because a usage limit is reached (the five-hour or weekly
+window), nightrunner reads when the limit resets and waits until two minutes
+after that. It then sends a prompt telling Claude the limit has reset and to
+carry on, checking the working tree first, because sub-agent work in flight may
+have been lost. The run stays in the same session, and `/nightrunner status`
+shows when it will carry on.
+
+- **Too far away:** if the reset is more than 6 hours off (in practice, the
+  weekly limit), the run stops instead. The 6 hours count from the first wait.
+- **No reset time:** if the limit doesn't say when it resets, nightrunner tries
+  again every 30 minutes, within the same 6 hours.
+- **Stop or carry on yourself:** `/nightrunner stop` cancels a wait. If you
+  carry on by hand and the turn gets through, the wait is cancelled.
+- **Tab closed during a wait:** the run isn't resumed automatically. Open the
+  folder again and type "continue" when the limit has reset.
+
+Waiting is on by default. To turn it off:
+
+1. **This run only:** `/nightrunner start wait=off`, or ask Claude to change it
+   for the active run.
+2. **For a project:** put `"usageWait": false` in the project's
+   `.claude/nightrunner.json`, or ask Claude to ("turn off nightrunner's
+   usage-limit wait for this project"). Commit the file to share it.
+
+With waiting off, a usage limit leaves the run idle until you carry on.
+
+### Asking Claude to configure it
+
+Claude has a `configure` tool (`mcp__nightrunner__configure`) and uses it when
+you ask it to change nightrunner's settings:
+
+- "Set my nightrunner default budget to 150k" saves your default.
+- "Set it back to the default" clears it, so runs use the plugin option or 200k.
+- "Change this run's budget to 300k" changes the active run straight away. If
+  context is already past the new budget, nightrunner asks for a handover at the
+  end of the next turn.
+- "Turn off the usage-limit wait for this project" writes
+  `.claude/nightrunner.json`. "…for this run" changes only the active run.
+- "What are my nightrunner settings?" reports them.
+
+Claude can't start or stop a run. You do that with `/nightrunner start` and
+`/nightrunner stop`.
+
+## What it writes
+
+It writes `.nightrunner/run.json` in the project folder, holding the run state
+and the pending note, and `~/.claude/nightrunner.json` when you save a default
+through Claude. `.nightrunner/` contains a `.gitignore` of `*`, so nothing
+in it is committed.
+
+## Limits
+
+This is an early release (0.1.0):
+
+- Past the budget, nightrunner asks for a handover once per session, but it
+  doesn't force one. Nothing stops a run on cost or session count. Watch a long
+  run, or tell Claude in the prompt when to stop.
+- The usage-limit wait has been unit-tested but hasn't yet seen a real limit.
+- There are no notifications yet. A run that stops on a far-off reset just
+  stops.
+- Model, permissions and git are left as you set them. A permission prompt
+  pauses the run until you answer it.
+- Use one tab per folder during a run.
+- If the tab or VS Code closes mid-run, the run stays active. A new tab in that
+  folder picks it up: carry on there, or run `/nightrunner stop` before starting
+  another.
+
+Later versions are planned to add a model pin, session and no-progress limits,
+notifications, guard rails and commits.
+
+## Development
+
+```sh
+npm run check   # syntax-check every module
+npm test        # unit tests (node:test, Node 22+)
+claude plugin validate .
+```
+
+The plugin is in `plugin/`. The hooks module is `plugin/hooks/register.js`, and
+its logic is in `plugin/lib/mvp.js` and `plugin/lib/usage.js`. The other modules
+in `plugin/lib/` are the tested core for the planned guard rails. The hooks
+don't use them yet. The mods loader only lets `$` be passed to
+functions declared at the top level of the module, and `claude plugin validate`
+doesn't check this. Run a headless `claude -p "/nightrunner status" --debug` in
+a test folder to see load errors.
+
+## License
+
+MIT

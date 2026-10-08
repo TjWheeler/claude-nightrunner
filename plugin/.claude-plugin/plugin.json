@@ -1,0 +1,25 @@
+{
+  "name": "nightrunner",
+  "version": "0.1.0",
+  "description": "Runs long work across fresh sessions: Claude hands over a note, nightrunner clears the context and the next session carries on from it.",
+  "license": "MIT",
+  "author": {
+    "name": "Tim Wheeler"
+  },
+  "repository": "https://github.com/TjWheeler/claude-nightrunner",
+  "homepage": "https://github.com/TjWheeler/claude-nightrunner",
+  "userConfig": {
+    "contextBudget": {
+      "type": "string",
+      "title": "Context budget",
+      "description": "Context size, in tokens, at which nightrunner asks Claude to write a restart prompt and hand over, such as 150k or 300000. Empty means 200k. A default saved through Claude, or /nightrunner start budget=…, takes precedence."
+    }
+  },
+  "keywords": [
+    "sessions",
+    "handover",
+    "context",
+    "long-running",
+    "autonomous"
+  ]
+}

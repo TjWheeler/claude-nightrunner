@@ -1,0 +1,14 @@
+{
+  "name": "nightrunner",
+  "owner": {
+    "name": "Tim Wheeler"
+  },
+  "plugins": [
+    {
+      "name": "nightrunner",
+      "source": "./plugin",
+      "description": "Runs long work across fresh sessions: Claude hands over a note, nightrunner clears the context and the next session carries on from it."
+    }
+  ],
+  "description": "The nightrunner plugin for Claude Code."
+}
