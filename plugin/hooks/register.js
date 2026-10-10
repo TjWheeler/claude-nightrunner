@@ -34,6 +34,12 @@ let startPending = false // the clear ran; submit the note when the session ends
 let writing = Promise.resolve()
 let waitTimer = null // the pending resume after a usage limit
 
+// A project path made absolute. $.fs resolves relative paths against the
+// working directory, which a shell cd moves; the session's root it doesn't.
+async function at($, path) {
+  return `${await $.session.root()}/${path}`
+}
+
 // Writes are queued: overlapping whole-file writes corrupted a probe log.
 // Top-level because the mods loader only lets $ be passed to such functions.
 // A run another tab has taken over is let go, never written, unless this
@@ -43,9 +49,9 @@ async function save($, { claim = false } = {}) {
   if (!snapshot?.id) return writing
   writing = writing.then(async () => {
     let onDisk = null
-    if (!claim) try { onDisk = parseRun(await $.fs.read(runFile(snapshot.id))) } catch {}
+    if (!claim) try { onDisk = parseRun(await $.fs.read(await at($, runFile(snapshot.id)))) } catch {}
     if (ownedByOther(onDisk, owner)) return letGo($, snapshot.id)
-    await $.fs.write(runFile(snapshot.id), JSON.stringify(snapshot, null, 2) + '\n')
+    await $.fs.write(await at($, runFile(snapshot.id)), JSON.stringify(snapshot, null, 2) + '\n')
   }).catch(() => {})
   return writing
 }
@@ -83,18 +89,19 @@ async function readRunFile($, path) {
 // Every run in this folder, after moving one left by an older version.
 async function readRuns($) {
   try {
-    const legacy = parseRun(await $.fs.read(LEGACY_RUN_FILE))
+    const legacy = parseRun(await $.fs.read(await at($, LEGACY_RUN_FILE)))
     if (isActive(legacy)) {
       const moved = migrateLegacyRun(legacy)
-      await $.fs.write(runFile(moved.id), JSON.stringify(moved, null, 2) + '\n')
-      await $.fs.write(LEGACY_RUN_FILE, JSON.stringify(endRun(legacy, `moved to ${runFile(moved.id)}`, Date.now()), null, 2) + '\n')
+      await $.fs.write(await at($, runFile(moved.id)), JSON.stringify(moved, null, 2) + '\n')
+      await $.fs.write(await at($, LEGACY_RUN_FILE), JSON.stringify(endRun(legacy, `moved to ${runFile(moved.id)}`, Date.now()), null, 2) + '\n')
     }
   } catch {}
   const runs = []
   try {
-    for (const entry of await $.fs.list(RUNS_DIR)) {
+    const dir = await at($, RUNS_DIR)
+    for (const entry of await $.fs.list(dir)) {
       if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-      const r = await readRunFile($, `${RUNS_DIR}/${entry.name}`)
+      const r = await readRunFile($, `${dir}/${entry.name}`)
       if (r?.id) runs.push(r)
     }
   } catch {}
@@ -131,7 +138,7 @@ async function readUserFile($) {
 }
 
 async function readProjectFile($) {
-  try { return parseUserFile(await $.fs.read(PROJECT_FILE)) } catch { return {} }
+  try { return parseUserFile(await $.fs.read(await at($, PROJECT_FILE))) } catch { return {} }
 }
 
 // The run ended without the user stopping it: tell them through Claude Code's
@@ -237,7 +244,7 @@ async function startRun($, args) {
   const now = Date.now()
   run = newRun({ id: newRunId(now), owner, sessionId: await $.session.id(), name: args.name, budget: resolved.budget, budgetSource: resolved.source, usageWait: wait.usageWait, usageWaitSource: wait.source, notify: notify.notify, notifySource: notify.source, maxSessions: sessions.maxSessions, maxSessionsSource: sessions.source, now })
   clearPending = startPending = false
-  await $.fs.write(GITIGNORE, GITIGNORE_TEXT)
+  await $.fs.write(await at($, GITIGNORE), GITIGNORE_TEXT)
   await save($, { claim: true })
   $.ui.invalidate('tool.describe')
   return { started: true, text: `Run started, context budget ${formatTokens(run.budget)} (${run.budgetSource}), usage-limit wait ${run.usageWait ? 'on' : 'off'} (${run.usageWaitSource}), notifications ${run.notify ? 'on' : 'off'} (${run.notifySource}), at most ${run.maxSessions} sessions (${run.maxSessionsSource}). Claude calls the handover tool to carry on in a fresh session; past the budget, nightrunner asks it to. Stop with /nightrunner stop.` }
@@ -312,7 +319,7 @@ export function register(on, opts) {
       }
       if (checked.value.projectUsageWait !== undefined) {
         const v = checked.value.projectUsageWait
-        await $.fs.write(PROJECT_FILE, settingsFileText(await readProjectFile($), 'usageWait', v === 'default' ? undefined : v))
+        await $.fs.write(await at($, PROJECT_FILE), settingsFileText(await readProjectFile($), 'usageWait', v === 'default' ? undefined : v))
         done.push(v === 'default' ? `Removed usageWait from ${PROJECT_FILE}, so this project's runs wait (the default).` : `Set usageWait to ${v ? 'on' : 'off'} in ${PROJECT_FILE}. Commit it to share it with the project.`)
       }
       if (checked.value.runUsageWait !== undefined) {
@@ -329,7 +336,7 @@ export function register(on, opts) {
       }
       if (checked.value.projectNotify !== undefined) {
         const v = checked.value.projectNotify
-        await $.fs.write(PROJECT_FILE, settingsFileText(await readProjectFile($), 'notify', v === 'default' ? undefined : v))
+        await $.fs.write(await at($, PROJECT_FILE), settingsFileText(await readProjectFile($), 'notify', v === 'default' ? undefined : v))
         done.push(v === 'default' ? `Removed notify from ${PROJECT_FILE}.` : `Set notify to ${v ? 'on' : 'off'} in ${PROJECT_FILE}. Commit it to share it with the project.`)
       }
       if (checked.value.runNotify !== undefined) {
@@ -346,7 +353,7 @@ export function register(on, opts) {
       }
       if (checked.value.projectMaxSessions !== undefined) {
         const v = checked.value.projectMaxSessions
-        await $.fs.write(PROJECT_FILE, settingsFileText(await readProjectFile($), 'maxSessions', v === 'default' ? undefined : v))
+        await $.fs.write(await at($, PROJECT_FILE), settingsFileText(await readProjectFile($), 'maxSessions', v === 'default' ? undefined : v))
         done.push(v === 'default' ? `Removed maxSessions from ${PROJECT_FILE}.` : `Set maxSessions to ${v} in ${PROJECT_FILE}. Commit it to share it with the project.`)
       }
       if (checked.value.runMaxSessions !== undefined) {

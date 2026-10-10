@@ -290,7 +290,7 @@ in it is committed.
 
 ## Limits
 
-This is an early release (0.1.5):
+This is an early release (0.1.6):
 
 - Past the budget, nightrunner asks for a handover once per session, but it
   doesn't force one. Apart from paid overage and the session limit, nothing

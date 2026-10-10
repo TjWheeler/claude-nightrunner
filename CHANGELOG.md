@@ -4,6 +4,14 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semver](https://semver.org/).
 
+## [0.1.6] - 2026-10-10
+
+### Fixed
+
+- Run files and `.claude/nightrunner.json` are found from the project root. A
+  shell `cd` during a run moved the working directory, and the run's file was
+  written in that subfolder instead of the project's `.nightrunner/runs/`.
+
 ## [0.1.5] - 2026-10-09
 
 ### Added
