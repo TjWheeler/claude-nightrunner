@@ -46,9 +46,18 @@ claude plugin install nightrunner@nightrunner
 After installing, open a new Claude tab, or reload the VS Code window, so the
 plugin loads.
 
-- **Update:** run `claude plugin marketplace update nightrunner`, then
-  `claude plugin update nightrunner@nightrunner`, then restart Claude Code.
-- **Remove:** run `claude plugin uninstall nightrunner@nightrunner`.
+To update, run these from a terminal, then restart Claude Code:
+
+```sh
+claude plugin marketplace update nightrunner
+claude plugin update nightrunner@nightrunner
+```
+
+To remove it:
+
+```sh
+claude plugin uninstall nightrunner@nightrunner
+```
 
 ### From a local clone
 
